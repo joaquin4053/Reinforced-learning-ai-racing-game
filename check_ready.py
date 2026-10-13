@@ -10,6 +10,9 @@ import random
 import sys
 import time
 
+import numpy as np
+
+from game import sensors
 from game.car import DT
 from game.sim import (PHYSICS_VERSION, RULES_VERSION, SENSOR_VERSION, Rules, Sim, action,
                       format_time)
@@ -63,6 +66,15 @@ def place_car(sim, dist, angle=0.0, speed=20.0):
     fx, fz = car.forward
     car.vx, car.vz = fx * speed, fz * speed
     car.yaw_rate = 0.0
+
+
+def place_car_offset(sim, dist, lateral, angle):
+    """Wie place_car, aber seitlich versetzt (lateral in m, + = rechts) und im Stand."""
+    place_car(sim, dist, angle, speed=0.0)
+    (_, _), (tx, tz) = sim.track.point_at(dist)
+    sim.car.x += tz * lateral
+    sim.car.z -= tx * lateral
+    sim._rays = None
 
 
 def inside_track(track, x, z):
@@ -231,6 +243,74 @@ def check_r4():
         if full_state(a) != full_state(b):
             return False, f"Eingabe {wild} verhält sich nicht wie {clipped}."
     return True, "Zu große, zu kleine und ungültige Werte (NaN) fahren exakt wie die abgeschnittenen Werte."
+
+
+@check("Sensoren: Werte immer im erlaubten Bereich")
+def check_sensor_ranges():
+    track = Track.load(TRACK_FILE)
+    sim = Sim(track, rules=ENDLESS, record=False)
+    rng = random.Random(11)
+    raw_outside = 0
+    steps = 20_000
+    for i in range(steps):
+        if i % 2000 == 0:   # immer wieder andere Fahrweisen: Vollgas, rückwärts, Schlangenlinien
+            style = rng.choice(["vollgas", "rueckwaerts", "wild"])
+        if style == "vollgas":
+            a = [rng.uniform(-0.3, 0.3), 1.0, 0.0, 0.0]
+        elif style == "rueckwaerts":
+            a = [rng.uniform(-1, 1), 0.0, 1.0, 0.0]
+        else:
+            a = [rng.uniform(-1, 1), rng.random(), rng.random() * 0.2, float(rng.random() < 0.3)]
+        sim.step(a)
+        obs = sim.observation()
+        if obs.shape != (sensors.SIZE,) or not np.all(np.isfinite(obs)):
+            return False, f"Beobachtung hat falsche Größe oder ungültige Zahlen: {obs}"
+        if np.any(obs < sensors.LOW) or np.any(obs > sensors.HIGH):
+            return False, f"Wert außerhalb des Bereichs nach {i} Schritten."
+        raw = sensors.observe(sim.car, sim.track_dir, sim.rays(), clip=False)
+        raw_outside += bool(np.any(raw < sensors.LOW - 1e-6) or np.any(raw > sensors.HIGH + 1e-6))
+    if raw_outside:
+        return False, (f"In {raw_outside} von {steps} Schritten lag ein Rohwert außerhalb des Bereichs "
+                       f"(Normierung in config.toml zu klein?).")
+    return True, (f"{steps // 1000}'000 Schritte (Vollgas, rückwärts, wild, mit Drift): alle {sensors.SIZE} Werte "
+                  f"immer im erlaubten Bereich, auch schon vor dem Zuschneiden.")
+
+
+@check("Sensoren: Strahlen plausibel, nie durch die Wand")
+def check_rays():
+    track = Track.load(TRACK_FILE)
+    sim = Sim(track, rules=ENDLESS)
+    half = track.width / 2
+    side_index = {0: "links", sensors.RAY_COUNT - 1: "rechts"}
+    # a) Auto mittig, in Fahrtrichtung: Strahlen genau zur Seite messen die halbe Streckenbreite
+    for k in range(8):
+        dist = track.length * k / 8 + 20
+        place_car_offset(sim, dist, 0.0, 0.0)
+        rays = sim.rays()
+        for i, name in side_index.items():
+            if not 0.85 * half <= rays[i] <= 1.15 * half:
+                return False, f"Bei {dist:.0f} m misst der Strahl nach {name} {rays[i]:.1f} m statt ca. {half:.0f} m."
+    # b) 2000 zufällige Positionen und Richtungen: jeder Strahl endet an der Wand, nicht dahinter
+    rng = random.Random(5)
+    for _ in range(2000):
+        place_car_offset(sim, rng.uniform(0, track.length), rng.uniform(-half + 1.5, half - 1.5),
+                         rng.uniform(-math.pi, math.pi))
+        c = sim.car
+        for a, d in zip(c.heading + sensors.RAY_ANGLES, sim.rays()):
+            ex, ez = c.x + math.sin(a) * (d - 0.05), c.z + math.cos(a) * (d - 0.05)
+            if not inside_track(track, ex, ez):
+                return False, f"Ein Strahl geht durch die Streckenbegrenzung (bei {c.x:.0f}, {c.z:.0f})."
+    return True, (f"An 8 Stellen messen die Seitenstrahlen die halbe Breite ({half:.0f} m). "
+                  f"2000 zufällige Positionen x {sensors.RAY_COUNT} Strahlen: alle enden an der Wand, keiner geht hindurch.")
+
+
+@check("Sensoren: Tabelle in CLAUDE.md passt zum Code")
+def check_sensor_table():
+    text = open("CLAUDE.md", encoding="utf-8").read()
+    if sensors.markdown_table() not in text:
+        return False, ("Die Tabelle BEOBACHTUNG DER KI in CLAUDE.md ist veraltet. Neu erzeugen mit: "
+                       ".venv/bin/python -c \"from game import sensors; print(sensors.markdown_table())\"")
+    return True, f"Alle {sensors.SIZE} Einträge (Index, Name, Bedeutung, Bereich) stimmen mit game/sensors.py überein."
 
 
 @check("R6: Rundenzeit = Physik-Schritte × Zeitschritt")

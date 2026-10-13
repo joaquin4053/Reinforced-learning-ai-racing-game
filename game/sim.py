@@ -15,18 +15,15 @@ import numpy as np
 
 from .car import DT, Car
 from .config import CONFIG, VERSIONS
-from .raycast import cast_rays, closest_wall
+from . import sensors
+from .raycast import closest_wall
 
 # Versionsnummern (Regel R8) – werden in config.toml gepflegt
 PHYSICS_VERSION = VERSIONS["physik"]
 RULES_VERSION = VERSIONS["regeln"]
 SENSOR_VERSION = VERSIONS["sensoren"]
 
-_SENS = CONFIG["sensoren"]
-_half = _SENS["winkel_bereich"] / 2
-RAY_ANGLES = np.radians(np.linspace(-_half, _half, _SENS["anzahl_strahlen"]))  # relativ zur Fahrtrichtung
-RAY_RANGE = _SENS["reichweite"]
-SPEED_NORM = _SENS["tempo_norm"]
+RAY_ANGLES, RAY_RANGE = sensors.RAY_ANGLES, sensors.RAY_RANGE   # Sensoren: siehe game/sensors.py
 
 _COLL = CONFIG["kollision"]
 COLLISION_CIRCLES = tuple(_COLL["kreise"])
@@ -236,24 +233,15 @@ class Sim:
         c = self.car
         return (c.x, c.z, c.heading)
 
-    # ---------- Sensoren (für die KI) ----------
+    # ---------- Sensoren (für die KI, siehe game/sensors.py) ----------
     def rays(self):
         """Distanzen der Sensorstrahlen in Metern."""
         if self._rays is None:
             c = self.car
-            self._rays = cast_rays(c.x, c.z, c.heading + RAY_ANGLES, self.track.walls, RAY_RANGE)
+            self._rays = sensors.ray_distances(c.x, c.z, c.heading, self.track.walls)
         return self._rays
 
     def observation(self):
-        """Was die KI "sieht" (nur Fahrersicht, Regel R5) – 16 Zahlen:
-        11 Sensorstrahlen, Tempo vorwärts/seitlich, Lenkradstellung, Winkel zur Strecke (sin/cos).
-        Keine Koordinaten, keine Ideallinie, nichts hinter der Sensorreichweite.
-        Bei jeder Änderung SENSOR_VERSION erhöhen!
-        """
-        c = self.car
-        vf, vr = c.local_velocity()
-        fx, fz = c.forward
-        tx, tz = self.track_dir
-        extra = [vf / SPEED_NORM, vr / SPEED_NORM, c.steer,
-                 fx * tz - fz * tx, fx * tx + fz * tz]
-        return np.concatenate([self.rays() / RAY_RANGE, extra]).astype(np.float32)
+        """Was die KI "sieht" (nur Fahrersicht, Regel R5): Vektor mit sensors.SIZE Zahlen,
+        Reihenfolge wie die Tabelle in CLAUDE.md."""
+        return sensors.observe(self.car, self.track_dir, self.rays())

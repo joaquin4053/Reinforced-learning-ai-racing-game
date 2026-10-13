@@ -43,3 +43,30 @@ R11 Fahrt-Ende ohne Ziel (Crash): Eine Fahrt endet vorzeitig als Crash, wenn (a)
 5. Alles aufzeichnen (jeder Versuch, Modell-Snapshots)
 6. Zuschauer mit Zeitliste wie bei einem Videoplayer
 7. Geister (viele Versuche gleichzeitig)
+
+## BEOBACHTUNG DER KI (Sensor-Version 2)
+Was `observation()` liefert, in genau dieser Reihenfolge. Erzeugt aus `game/sensors.py`; `check_ready.py` prüft, dass diese Tabelle zum Code passt.
+
+| Index | Name | Bedeutung | Wertebereich |
+|---|---|---|---|
+| 0 | `strahl_0` | Abstand zur Wand, Strahl 90.0° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 1 | `strahl_1` | Abstand zur Wand, Strahl 78.8° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 2 | `strahl_2` | Abstand zur Wand, Strahl 67.5° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 3 | `strahl_3` | Abstand zur Wand, Strahl 56.2° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 4 | `strahl_4` | Abstand zur Wand, Strahl 45.0° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 5 | `strahl_5` | Abstand zur Wand, Strahl 33.8° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 6 | `strahl_6` | Abstand zur Wand, Strahl 22.5° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 7 | `strahl_7` | Abstand zur Wand, Strahl 11.2° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 8 | `strahl_8` | Abstand zur Wand, Strahl 0.0° geradeaus (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 9 | `strahl_9` | Abstand zur Wand, Strahl 11.2° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 10 | `strahl_10` | Abstand zur Wand, Strahl 22.5° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 11 | `strahl_11` | Abstand zur Wand, Strahl 33.8° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 12 | `strahl_12` | Abstand zur Wand, Strahl 45.0° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 13 | `strahl_13` | Abstand zur Wand, Strahl 56.2° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 14 | `strahl_14` | Abstand zur Wand, Strahl 67.5° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 15 | `strahl_15` | Abstand zur Wand, Strahl 78.8° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 16 | `strahl_16` | Abstand zur Wand, Strahl 90.0° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
+| 17 | `tempo` | Tempo vorwärts / 60 m/s (negativ = rückwärts) | -1 bis 1 |
+| 18 | `winkel_strecke` | Winkel zwischen Fahrtrichtung und Streckenrichtung / 180° (positiv = Auto zeigt nach rechts) | -1 bis 1 |
+| 19 | `rutschen` | Tempo seitwärts / 60 m/s (positiv = rutscht nach rechts) | -1 bis 1 |
+| 20 | `lenkung` | aktuelle Lenkradstellung (-1 = voll links, +1 = voll rechts) | -1 bis 1 |

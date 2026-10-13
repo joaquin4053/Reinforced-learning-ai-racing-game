@@ -11,8 +11,8 @@ from panda3d.core import SamplerState
 from ursina import AmbientLight, DirectionalLight, Entity, Mesh, Sky, Texture, Vec3, camera, color
 from ursina.shaders import lit_with_shadows_shader, unlit_shader
 
-from game.raycast import cast_rays
-from game.sim import RAY_ANGLES, RAY_RANGE, format_delta, format_time  # noqa: F401 (für play.py)
+from game.sensors import RAY_ANGLES, RAY_RANGE, ray_distances
+from game.sim import format_delta, format_time  # noqa: F401 (für play.py)
 
 WALL_HEIGHT = 1.4
 WALL_THICK = 0.8
@@ -330,7 +330,7 @@ class RayViz(Entity):
 
     def set_state(self, x, z, heading):
         """Für Replays: Strahlen aus einer Position neu berechnen (gleiche Funktion wie in der Sim)."""
-        self.set_distances(x, z, heading, cast_rays(x, z, heading + RAY_ANGLES, self.track.walls, RAY_RANGE))
+        self.set_distances(x, z, heading, ray_distances(x, z, heading, self.track.walls))
 
 
 # ---------- Welt ----------

@@ -34,7 +34,8 @@ Wer dort etwas ändert, erhöht die passende Versionsnummer (Regel R8).
 ```
 game/            Simulation, OHNE Grafik (auch fürs KI-Training)
   car.py         Fahrphysik (fester Zeitschritt 1/60 s)
-  sim.py         Sim: reset(), step(action), Regeln, Checkpoints, Sensoren, PHYSICS_VERSION
+  sim.py         Sim: reset(), step(action), Regeln, Checkpoints
+  sensors.py     Was die KI sieht: Strahlen + Fahrwerte, Reihenfolge der Beobachtung
   track.py       Map laden, progress_at(x, z) = Fortschritt entlang der Strecke
   ghost.py       Geister speichern/laden, Bestzeiten
   raycast.py     Abstandssensoren
@@ -79,7 +80,8 @@ Ergebnis, Endzeit oder Crash mit Fortschritt in %, Zwischenzeiten, Physik-Versio
 Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zählen nicht mehr (sie bleiben unter `alte_rekorde` aufgehoben).
 
 ## Für die KI (Phase 2)
-- `Sim.observation()`: 16 Werte, nur Fahrersicht (Regel R5): 11 Raycasts, Tempo vor/seitlich, Lenkradstellung, Winkel zur Strecke.
+- `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5): 17 Sensorstrahlen, Tempo, Winkel zur Strecke,
+  seitliches Rutschen, Lenkradstellung. Reihenfolge als Tabelle in [CLAUDE.md](CLAUDE.md), Code in `game/sensors.py`.
   Änderungen daran erhöhen `sensoren` in `config.toml`.
 - `Sim.progress`: Meter entlang der Strecke (Belohnung = Zuwachs pro Schritt)
 - `events["wall_hit"]` / `events["wall"]`: neue Wandberührung / gerade an der Wand (Strafe)

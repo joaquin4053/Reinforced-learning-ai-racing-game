@@ -200,5 +200,5 @@ def test_observation_is_driver_view_only():
     shifted = dict(data, points=[[x + 1000, z - 500] for x, z in data["points"]])
     a = Sim(Track(data, TRACKS[0])).reset()
     b = Sim(Track(shifted, TRACKS[0])).reset()
-    assert a.shape == (16,)
+    assert a.shape == (21,)
     assert np.allclose(a, b, atol=1e-5)

@@ -10,7 +10,7 @@
 [versionen]
 physik = 6      # 2: Wand kein Crash, 3: Reifenmodell, 4: Grip-Abriss + Motorbremse, 5: Feinschliff, 6: kein Übersteuern
 regeln = 1
-sensoren = 1
+sensoren = 2     # 2: 17 Strahlen, Winkel als ein Wert, ohne Abstand zur Mitte
 
 [simulation]
 physik_hz = 60          # Physik-Schritte pro Sekunde (Zeitschritt = 1/60 s)
@@ -70,7 +70,7 @@ wrong_way_meters = 15.0     # so weit hinter den eigenen Bestwert zurück = fals
 time_limit = 180.0          # Sekunden
 
 [sensoren]
-anzahl_strahlen = 11        # Sensorstrahlen, gleichmäßig verteilt
+anzahl_strahlen = 17        # Sensorstrahlen, gleichmäßig verteilt
 winkel_bereich = 180.0      # Grad, von links (-90°) bis rechts (+90°)
 reichweite = 100.0          # m (R5: nichts hinter der Sensorreichweite)
-tempo_norm = 50.0           # m/s, Tempo wird für die KI durch diesen Wert geteilt
+tempo_norm = 60.0           # m/s, Tempo wird für die KI durch diesen Wert geteilt (Höchsttempo ~53 m/s)
