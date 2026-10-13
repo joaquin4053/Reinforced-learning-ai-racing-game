@@ -4,6 +4,6 @@ pillow
 imageio
 imageio-ffmpeg
 # Phase 2 (KI-Training):
-# gymnasium
+gymnasium
 # stable-baselines3
 pytest

@@ -337,6 +337,146 @@ def check_r6():
                   f"unabhängig von der echten Uhr, Anzeige auf 0.01 s.")
 
 
+# ---------- Gym-Umgebung (Plan-Schritt 3) ----------
+def run_episode(env, policy, max_steps=None):
+    """Eine Episode fahren. Gibt (Gesamt-Reward, Reward in den ersten 10 s, letztes info) zurück."""
+    obs, info = env.reset()
+    total, first_10s, steps = 0.0, 0.0, 0
+    done = False
+    while not done:
+        obs, reward, terminated, truncated, info = env.step(policy(obs, steps))
+        total += reward
+        if steps < 10 / DT:
+            first_10s += reward
+        steps += 1
+        done = terminated or truncated or (max_steps is not None and steps >= max_steps)
+    return total, first_10s, info
+
+
+def _random_episodes(args):
+    """Läuft in einem eigenen Prozess: Zufallsfahrer über mehrere Episoden, prüft jede Rückgabe."""
+    from rl.env import RaceEnv
+    first_seed, count = args
+    env = RaceEnv()
+    ends, steps = {}, 0
+    for seed in range(first_seed, first_seed + count):
+        env.action_space.seed(seed)
+        obs, info = env.reset(seed=seed)
+        done = False
+        while not done:
+            obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+            steps += 1
+            if not env.observation_space.contains(obs) or not math.isfinite(reward):
+                return f"Episode {seed}: ungültige Beobachtung oder ungültiger Reward", ends, steps
+            if terminated and truncated:
+                return f"Episode {seed}: terminated und truncated gleichzeitig", ends, steps
+            if truncated and (info["ende"] != "Zeitlimit" or info["reward_teile"]["crash"] != 0):
+                return f"Episode {seed}: Zeitlimit falsch behandelt", ends, steps
+            done = terminated or truncated
+        ends[info["ende"]] = ends.get(info["ende"], 0) + 1
+    return None, ends, steps
+
+
+@check("Gym: check_env von Gymnasium")
+def check_gym_env():
+    import warnings
+    from gymnasium.utils.env_checker import check_env
+    from rl.env import RaceEnv
+    env = RaceEnv()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        check_env(env, skip_render_check=True)
+    if caught:
+        return False, f"check_env meldet Warnungen: {[str(w.message)[:100] for w in caught]}"
+    return True, (f"Keine Fehler, keine Warnungen. Beobachtung: {env.observation_space.shape[0]} Werte, "
+                  f"Aktion: {env.action_space.shape[0]} Werte (Lenkung, Gas, Bremse{', Drift' if env.drift else ''}).")
+
+
+@check("Gym: Zufallsfahrer, 1000 Episoden")
+def check_random_driver():
+    import os
+    from multiprocessing import Pool
+    workers = max(1, min(8, (os.cpu_count() or 2) - 1))
+    chunks = [(i * 1000 // workers, (i + 1) * 1000 // workers - i * 1000 // workers) for i in range(workers)]
+    start = time.perf_counter()
+    with Pool(workers) as pool:
+        results = pool.map(_random_episodes, chunks)
+    ends, steps = {}, 0
+    for error, part, n in results:
+        if error:
+            return False, error
+        steps += n
+        for k, v in part.items():
+            ends[k] = ends.get(k, 0) + v
+    summary = ", ".join(f"{k} {v}x" for k, v in sorted(ends.items()))
+    return sum(ends.values()) == 1000, (f"1000 Episoden ohne Fehler ({steps // 1000}'000 Schritte, "
+                                        f"{time.perf_counter() - start:.0f} s auf {workers} Kernen). Enden: {summary}.")
+
+
+@check("Gym: Regel-Fahrer (nur Sensoren) schafft eine Runde")
+def check_rule_driver():
+    from rl.env import RaceEnv
+    from rl.rule_driver import rule_action
+    env = RaceEnv()
+    total, _, info = run_episode(env, lambda obs, step: rule_action(obs))
+    if not info["gueltige_runde"]:
+        return False, f"Regel-Fahrer kommt nicht ins Ziel: {info['ende']} bei {info['fortschritt_prozent']:.0f} %."
+    return True, (f"Gültige Runde in {format_time(info['rundenzeit'])} mit {info['wandberuehrungen']} Wandberührungen, "
+                  f"Reward {total:.1f}. Die Strecke ist mit diesen Sensoren lösbar.")
+
+
+@check("Gym: Reward genau nach R7")
+def check_reward_formula():
+    from rl.env import RaceEnv
+    from rl.rule_driver import rule_action
+    env = RaceEnv()
+    for policy, name in ((lambda obs, step: rule_action(obs), "Runde"), (lambda obs, step: [0, 0, 0, 0], "Stillstand")):
+        obs, info = env.reset()
+        start, total, steps, done = env.best_progress, 0.0, 0, False
+        while not done:
+            obs, reward, terminated, truncated, info = env.step(policy(obs, steps))
+            total += reward
+            steps += 1
+            done = terminated or truncated
+        expected = (env.k_progress * (env.best_progress - start) - env.k_time * steps
+                    + (env.k_finish if info["ende"] == "Ziel" else 0) - (env.k_crash if info["crash"] else 0))
+        if abs(total - expected) > 1e-6:
+            return False, f"{name}: Reward {total:.3f} weicht von der R7-Formel ab ({expected:.3f})."
+    return True, ("Summe aller Rewards = k_fortschritt × Höchststand-Zuwachs − k_zeit × Schritte "
+                  "± Ziel-Bonus/Crash-Strafe, exakt (Runde und Stillstand nachgerechnet).")
+
+
+@check("Gym: Lücken-Test R7 (Hin-und-her, Stillstand, Rückwärts)")
+def check_reward_loopholes():
+    from rl.env import RaceEnv
+    from rl.rule_driver import rule_action
+    env = RaceEnv()
+
+    def back_and_forth(forward_steps, back_steps):   # vor, zurück, vor, zurück ...
+        def policy(obs, step):
+            forward = step % (forward_steps + back_steps) < forward_steps
+            return rule_action(obs) if forward else np.array([0, 0, 1, 0], np.float32)
+        return policy
+
+    strategies = {
+        "Stillstand": lambda obs, step: np.zeros(4, np.float32),
+        "Rückwärts": lambda obs, step: np.array([0, 0, 1, 0], np.float32),
+        "Hin-und-her (1.5 s / 1.5 s)": back_and_forth(90, 90),
+        "Hin-und-her (1 s / 0.5 s)": back_and_forth(60, 30),
+        "Vollgas-Kreisen": lambda obs, step: np.array([1, 1, 0, 0], np.float32),
+    }
+    normal_total, normal_10s, _ = run_episode(env, lambda obs, step: rule_action(obs))
+    rows = []
+    for name, policy in strategies.items():
+        total, first_10s, info = run_episode(env, policy)
+        rows.append(f"{name} {total:.1f} (10 s: {first_10s:.1f}, Ende: {info['ende']})")
+        if total >= normal_total or first_10s >= normal_10s:
+            return False, (f"LÜCKE: '{name}' bringt {total:.1f} (10 s: {first_10s:.1f}), normales Fahren nur "
+                           f"{normal_total:.1f} (10 s: {normal_10s:.1f}).")
+    return True, (f"Normales Fahren: {normal_total:.1f} (erste 10 s: {normal_10s:.1f}). Alle anderen weniger: "
+                  + "; ".join(rows) + ".")
+
+
 # ---------- Ausführen ----------
 def main():
     print(f"Prüfe Simulation  (Physik v{PHYSICS_VERSION}, Regeln v{RULES_VERSION}, Sensoren v{SENSOR_VERSION}, "

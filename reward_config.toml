@@ -1,0 +1,37 @@
+# Reward (Belohnung) für das KI-Training – genau nach Regel R7, nur diese vier Bestandteile:
+#
+#   Reward pro Schritt = k_fortschritt × (neuer Höchststand des Fortschritts − bisheriger Höchststand, in m)
+#                        − k_zeit
+#                        − k_crash   (nur im Schritt, in dem ein Crash passiert, R11)
+#                        + k_ziel    (nur im Schritt, in dem eine gültige Runde fertig ist, R1)
+#
+# Zurückfahren und erneut Vorfahren bringt nichts (nur ein neuer Höchststand zählt).
+# Keine Belohnung für Tempo an sich, keine eigene Strafe für Wandberührungen (kostet aber Zeit).
+#
+# WICHTIG: Gewichte ändern -> reward erhöhen (Regel R8). Bestandteile ändern nur mit Zustimmung (Regel R10).
+
+[version]
+reward = 1
+
+[gewichte]
+# 1 Punkt pro Meter neuer Strecke. Eine Runde (1329 m) bringt so ca. 1329 Punkte, pro Schritt bei
+# Vollgas knapp 1 Punkt – eine gut handhabbare Größenordnung für das Lernverfahren (SAC).
+k_fortschritt = 1.0
+
+# 0.1 Punkte Abzug pro Physik-Schritt (= 6 Punkte pro Sekunde). Damit lohnt sich Schnellsein:
+# eine Runde in 45 s kostet 270 Punkte, in 55 s 330 Punkte. Weil Vorwärtsfahren schon ab 6 m/s
+# mehr Fortschritt bringt als die Zeitstrafe kostet, ist Fahren immer besser als Stehen oder Aufgeben.
+k_zeit = 0.1
+
+# Einmalig bei Crash (stecken geblieben oder falsche Richtung, R11). Groß genug, dass absichtliches
+# "schnell crashen" sich nie lohnt, aber klein gegen den Fortschritt einer ganzen Runde (~1329),
+# damit die KI sich traut, schneller zu fahren.
+k_crash = 50.0
+
+# Einmalig bei gültiger Runde. Macht das Ankommen deutlich besser als "fast angekommen" und hilft,
+# Stufe 1 (erste gültige Runde) zu erreichen.
+k_ziel = 100.0
+
+[umgebung]
+strecke = "tracks/map01.json"
+drift_erlaubt = true    # R4: die KI darf wie der Spieler driften (4. Aktion)

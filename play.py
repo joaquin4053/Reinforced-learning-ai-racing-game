@@ -98,7 +98,8 @@ def on_end():
     else:
         if sim.progress_pct >= 5:
             save_ghost(sim, "player")
-        state["message"] = f"CRASH – {END_REASONS[sim.end_reason]}\n{sim.progress_pct:.0f} % geschafft"
+        title = "ZEITLIMIT" if sim.result == "truncated" else f"CRASH – {END_REASONS[sim.end_reason]}"
+        state["message"] = f"{title}\n{sim.progress_pct:.0f} % geschafft"
     state["message"] += "\n[R] nochmal"
 
 

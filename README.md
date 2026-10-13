@@ -79,10 +79,10 @@ Ergebnis, Endzeit oder Crash mit Fortschritt in %, Zwischenzeiten, Physik-Versio
 Ändern sich Physik, Regeln oder Sensoren, erhöht man die Version in `config.toml` (`[versionen]`); ändert sich eine Map, erhöht man `"version"` in der Map-Datei.
 Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zählen nicht mehr (sie bleiben unter `alte_rekorde` aufgehoben).
 
-## Für die KI (Phase 2)
-- `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5): 17 Sensorstrahlen, Tempo, Winkel zur Strecke,
-  seitliches Rutschen, Lenkradstellung. Reihenfolge als Tabelle in [CLAUDE.md](CLAUDE.md), Code in `game/sensors.py`.
-  Änderungen daran erhöhen `sensoren` in `config.toml`.
-- `Sim.progress`: Meter entlang der Strecke (Belohnung = Zuwachs pro Schritt)
-- `events["wall_hit"]` / `events["wall"]`: neue Wandberührung / gerade an der Wand (Strafe)
-- Nach jedem 100. Versuch: `save_ghost(sim, "ai", attempt=n)` und `replay.py` als Subprozess → Video
+## Für die KI
+- **Gym-Umgebung:** `rl/env.py` (`RaceEnv`) mit `reset()` und `step(action)` nach Gymnasium-Standard.
+  Aktion `[Lenkung, Gas, Bremse, Drift]`, Beobachtung siehe Tabelle in [CLAUDE.md](CLAUDE.md).
+- **Reward** genau nach Regel R7, Gewichte in `reward_config.toml`. Beispiel mit echten Zahlen:
+  `.venv/bin/python tools/reward_example.py`
+- **Regel-Fahrer** `rl/rule_driver.py`: fährt nur mit den Sensoren der KI eine gültige Runde (Vergleichswert).
+- `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5), Code in `game/sensors.py`.

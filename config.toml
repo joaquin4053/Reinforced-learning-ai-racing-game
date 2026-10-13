@@ -9,7 +9,7 @@
 
 [versionen]
 physik = 6      # 2: Wand kein Crash, 3: Reifenmodell, 4: Grip-Abriss + Motorbremse, 5: Feinschliff, 6: kein Übersteuern
-regeln = 1
+regeln = 2       # 2: Zeitlimit ist kein Crash mehr, sondern ein Abbruch (R11)
 sensoren = 2     # 2: 17 Strahlen, Winkel als ein Wert, ohne Abstand zur Mitte
 
 [simulation]

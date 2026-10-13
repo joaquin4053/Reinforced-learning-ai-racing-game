@@ -86,6 +86,8 @@ class Ghost:
         if m["result"] == "finished":
             hits = m.get("wall_hits", 0)
             return f"{m['finish_time']:.2f} s" + (f" ({hits}× Wand)" if hits else "")
+        if m["result"] == "truncated":
+            return f"Abgebrochen bei {m['progress_pct']:.0f} % (Zeitlimit)"
         return f"Crash bei {m['progress_pct']:.0f} % ({END_REASONS.get(m['end_reason'], m['end_reason'])})"
 
     @property

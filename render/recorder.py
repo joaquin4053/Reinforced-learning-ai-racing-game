@@ -93,7 +93,8 @@ def render_video(ghost_path, out_path=None, label=None, show_rays=True, size=(12
             if meta["result"] == "finished":
                 big = f"ZIEL!  {format_time(meta['finish_time'])}"
             else:
-                big = f"CRASH – {END_REASONS.get(meta['end_reason'], '')}\n{meta['progress_pct']:.0f} % geschafft"
+                title = "ZEITLIMIT" if meta["result"] == "truncated" else f"CRASH – {END_REASONS.get(meta['end_reason'], '')}"
+                big = f"{title}\n{meta['progress_pct']:.0f} % geschafft"
         pct = 100 * progress[f] / (track.length * track.laps)
         hud.set(speed, t, f"{track.name}\nStrecke: {max(0.0, min(pct, 100.0)):4.1f} %", big)
         # Zwischenzeit 2.5 s lang einblenden

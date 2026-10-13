@@ -92,7 +92,7 @@ class Sim:
         self.next_gate = 0           # Index in self.gates
         self.splits = []             # Zeit bei jedem durchfahrenen Checkpoint/Ziel
         self.done = False
-        self.result = None           # "finished" oder "crashed"
+        self.result = None           # "finished" (Ziel), "crashed" (R11 a/b) oder "truncated" (Zeitlimit)
         self.end_reason = None       # Schlüssel aus END_REASONS
         self.finish_time = None
         self.wall_contact = False    # berührt das Auto gerade eine Wand?
@@ -127,7 +127,7 @@ class Sim:
         Rückgabe: Events dieses Schritts, z.B. {"checkpoint": "CP 2", "split": 12.35}
         """
         events = {"checkpoint": None, "split": None, "lap": False, "finished": False, "crashed": False,
-                  "wall": False, "wall_hit": False}
+                  "truncated": False, "wall": False, "wall_hit": False}
         if self.done:
             return events
         x0, z0 = self.car.x, self.car.z
@@ -175,10 +175,10 @@ class Sim:
         elif self.frame >= stuck_frames and \
                 self.progress - self._progress_log[-stuck_frames - 1] < r.stuck_min_progress:
             reason = "stuck"
-        elif self.time >= r.time_limit:
-            reason = "time_limit"
         if reason:
             self._end("crashed", reason, events)
+        elif self.time >= r.time_limit:   # Zeitlimit: kein Crash, sondern Abbruch (R11)
+            self._end("truncated", "time_limit", events)
 
     def _end(self, result, reason, events):
         self.done = True
@@ -186,6 +186,8 @@ class Sim:
         if result == "finished":
             self.finish_time = self.time
             events["finished"] = True
+        elif result == "truncated":
+            events["truncated"] = True
         else:
             events["crashed"] = True
 
