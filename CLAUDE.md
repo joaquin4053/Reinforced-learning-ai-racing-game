@@ -26,6 +26,9 @@ R9 Nachvollziehbarkeit: Jedes Training speichert seine vollständige Konfigurati
 
 R10 Regeln sind fest: Claude Code ändert keine Regel und keinen Bestandteil des Rewards ohne meine ausdrückliche Zustimmung. Wenn eine Regel ein Problem verursacht: zuerst erklären und fragen.
 
+R11 Fahrt-Ende ohne Ziel (Crash): Eine Fahrt endet vorzeitig als Crash, wenn (a) das Auto 2 s lang weniger als 1 m Fortschritt entlang der Strecke macht (stecken geblieben), (b) es mehr als 15 m hinter seinen bisher besten Fortschritt zurückfällt (falsche Richtung) oder (c) 180 s Simulationszeit vergangen sind (Zeitlimit). Ein Crash ergibt keine Rundenzeit und ist der "Crash" im Sinne von R7 (Crash-Strafe). Die Regel gilt für KI und Spieler gleich. Die Grenzwerte stehen in config.toml unter [regeln]; jede Änderung erhöht die Regel-Version.
+*(Ergänzt am 2026-10-14 mit Zustimmung.)*
+
 ## ERFOLGSSTUFEN
 - Stufe 1: Ankommen: Die KI schafft zum ersten Mal eine gültige Runde.
 - Stufe 2: Zuverlässig: Die deterministische Auswertung des aktuellen Modells kommt bei 5 Auswertungen in Folge ins Ziel.
