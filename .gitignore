@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Daten (werden erzeugt, nicht Teil des Codes)
+ghosts/
+saves/
+videos/
+.tmp/
+runs/
+models/
+
+# System
+.DS_Store
