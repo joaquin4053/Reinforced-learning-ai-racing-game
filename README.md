@@ -57,11 +57,11 @@ Eine Aktion ist immer `{"steer": -1..1, "throttle": 0..1, "brake": 0..1, "drift"
 Gleiche Regeln für Spieler und KI (Werte in `config.toml`, Abschnitt `[regeln]`):
 - **Ziel** erreicht, nachdem alle Checkpoints in der richtigen Reihenfolge durchfahren wurden
 - **Wand berühren beendet die Fahrt nicht.** Das Auto prallt ab, verliert Tempo und fährt weiter. Jede Berührung
-  wird gemeldet (`events["wall_hit"]`, `sim.wall_hits`), damit die KI dafür eine Strafe bekommen kann.
-  Mit `Rules(wall_is_crash=True)` ließe sich die Wand wieder tödlich machen.
+  wird gemeldet (`events["wall_hit"]`, `sim.wall_hits`). Eine eigene Reward-Strafe dafür gibt es nicht (R7),
+  die Wand kostet aber Tempo und damit Zeit.
 - **Crash: kein Fortschritt.** In 2 s weniger als 1 m vorwärts entlang der Strecke.
 - **Crash: falsche Richtung.** 15 m hinter den eigenen besten Fortschritt zurückgefallen.
-- **Zeitlimit** 180 s
+- **Zeitlimit** 180 s: kein Crash, sondern Abbruch ohne Wertung (im Training "truncated", R11)
 
 ## Neue Map anlegen
 Neue Datei `tracks/map02.json` nach dem Muster von `tracks/map01.json`:
