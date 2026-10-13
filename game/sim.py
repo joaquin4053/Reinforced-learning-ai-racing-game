@@ -3,32 +3,36 @@
 Benutzung (gleich für Spieler, KI und Tests):
     sim = Sim(Track.load("tracks/map01.json"))
     obs = sim.reset()
-    events = sim.step({"steer": 0.0, "throttle": 1.0, "brake": 0.0})
+    events = sim.step({"steer": 0.0, "throttle": 1.0, "brake": 0.0})   # oder sim.step([0.0, 1.0, 0.0])
     if sim.done: ...
 
 Deterministisch: kein Zufall, fester Zeitschritt. Gleiche Aktionen -> gleiche Fahrt.
+Alle Zahlenwerte und Versionsnummern stehen in config.toml.
 """
 from dataclasses import dataclass
 
 import numpy as np
 
 from .car import DT, Car
+from .config import CONFIG, VERSIONS
 from .raycast import cast_rays, closest_wall
 
-# Erhöhen, sobald sich Physik oder Regeln ändern -> alte Geister werden als "alte Version" markiert
-PHYSICS_VERSION = 6  # 2: Wand kein Crash, 3: Reifenmodell, 4: Grip-Abriss + Motorbremse,
-                     # 5: Feinschliff, 6: kein Übersteuern mehr
+# Versionsnummern (Regel R8) – werden in config.toml gepflegt
+PHYSICS_VERSION = VERSIONS["physik"]
+RULES_VERSION = VERSIONS["regeln"]
+SENSOR_VERSION = VERSIONS["sensoren"]
 
-# Erhöhen, sobald sich ändert, was die KI "sieht" (observation, Strahlen, Reichweite)
-SENSOR_VERSION = 1
+_SENS = CONFIG["sensoren"]
+_half = _SENS["winkel_bereich"] / 2
+RAY_ANGLES = np.radians(np.linspace(-_half, _half, _SENS["anzahl_strahlen"]))  # relativ zur Fahrtrichtung
+RAY_RANGE = _SENS["reichweite"]
+SPEED_NORM = _SENS["tempo_norm"]
 
-RAY_ANGLES = np.radians(np.linspace(-90, 90, 11))  # Sensoren relativ zur Fahrtrichtung
-RAY_RANGE = 100.0
-SPEED_NORM = 50.0
-COLLISION_CIRCLES = (1.1, -1.1)  # zwei Kreise entlang der Längsachse (vorne/hinten)
-COLLISION_RADIUS = 1.05
-RESTITUTION = 0.25               # wie stark das Auto von der Wand abprallt
-WALL_FRICTION = 0.97             # Tempoverlust pro Schritt an der Wand
+_COLL = CONFIG["kollision"]
+COLLISION_CIRCLES = tuple(_COLL["kreise"])
+COLLISION_RADIUS = _COLL["radius"]
+RESTITUTION = _COLL["abprall"]
+WALL_FRICTION = _COLL["wandreibung"]
 
 END_REASONS = {
     "wall": "Wand berührt",
@@ -37,19 +41,41 @@ END_REASONS = {
     "time_limit": "Zeitlimit",
 }
 
+_RULES = CONFIG["regeln"]
+
 
 @dataclass
 class Rules:
-    """Wann endet eine Fahrt als Crash? Gilt für Spieler und KI gleich."""
-    wall_is_crash: bool = False      # False: abprallen und weiterfahren (wird nur gemeldet)
-    stuck_seconds: float = 2.0       # ...wenn in so vielen Sekunden
-    stuck_min_progress: float = 1.0  # ...weniger als so viele Meter Fortschritt
-    wrong_way_meters: float = 15.0   # so weit hinter den eigenen Bestwert zurück = falsche Richtung
-    time_limit: float = 180.0        # Sekunden
+    """Wann endet eine Fahrt als Crash? Gilt für Spieler und KI gleich (Werte aus config.toml)."""
+    wall_is_crash: bool = _RULES["wall_is_crash"]
+    stuck_seconds: float = _RULES["stuck_seconds"]
+    stuck_min_progress: float = _RULES["stuck_min_progress"]
+    wrong_way_meters: float = _RULES["wrong_way_meters"]
+    time_limit: float = _RULES["time_limit"]
+
+
+ACTION_KEYS = ("steer", "throttle", "brake", "drift")
 
 
 def action(steer=0.0, throttle=0.0, brake=0.0, drift=0.0):
     return {"steer": steer, "throttle": throttle, "brake": brake, "drift": drift}
+
+
+def as_action(act):
+    """Aktion als Dict oder als Liste [Lenkung, Gas, Bremse, (Drift)] annehmen."""
+    if isinstance(act, dict):
+        return act
+    return dict(zip(ACTION_KEYS, act))
+
+
+def format_time(t):
+    """Zeit anzeigen, z.B. 0:41.65 (Regel R6: auf 0.01 s)."""
+    return f"{int(t // 60)}:{t % 60:05.2f}"
+
+
+def format_delta(d):
+    """Differenz zum Geist, z.B. '+0.80 s' (langsamer) oder '-1.25 s' (schneller)."""
+    return f"{d:+.2f} s"
 
 
 class Sim:
@@ -100,6 +126,7 @@ class Sim:
         """Einen Zeitschritt (1/60 s) simulieren.
 
         act: {"steer": -1..1, "throttle": 0..1, "brake": 0..1, "drift": 0..1 (optional)}
+             oder als Liste [steer, throttle, brake, drift]. Zu große Werte werden abgeschnitten (R4).
         Rückgabe: Events dieses Schritts, z.B. {"checkpoint": "CP 2", "split": 12.35}
         """
         events = {"checkpoint": None, "split": None, "lap": False, "finished": False, "crashed": False,
@@ -107,6 +134,7 @@ class Sim:
         if self.done:
             return events
         x0, z0 = self.car.x, self.car.z
+        act = as_action(act)
         self.car.update(act.get("steer", 0.0), act.get("throttle", 0.0), act.get("brake", 0.0),
                         act.get("drift", 0.0))
         touching = self._collide()

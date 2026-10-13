@@ -3,7 +3,7 @@
 Eine Geist-Datei:
 {
   "meta": {
-    "format": 1, "physics_version": 1, "track_version": 2,
+    "format": 1, "physics_version": 6, "rules_version": 1, "track_version": 2, "sensor_version": 1,
     "map": "map01", "source": "player" | "ai", "attempt": 200 (nur KI), "driver": "Autopilot",
     "result": "finished" | "crashed", "end_reason": "wall" | ..., "finish_time": 41.23,
     "progress_pct": 63.5, "wall_hits": 3, "splits": [9.8, 18.2, ...], "dt": 0.01667, "created": "2026-10-13 18:00:00"
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from .car import DT
-from .sim import END_REASONS, PHYSICS_VERSION, SENSOR_VERSION
+from .sim import END_REASONS, PHYSICS_VERSION, RULES_VERSION, SENSOR_VERSION
 
 GHOST_DIR = Path("ghosts")
 TRACK_DIR = Path("tracks")
@@ -34,6 +34,7 @@ def save_ghost(sim, source, attempt=None, driver=None, folder=GHOST_DIR):
     meta = {
         "format": FORMAT,
         "physics_version": PHYSICS_VERSION,
+        "rules_version": RULES_VERSION,
         "track_version": sim.track.version,
         "sensor_version": SENSOR_VERSION,
         "map": sim.track.id,
@@ -122,8 +123,10 @@ def track_version(map_id):
 
 
 def _current_versions(info, map_id):
-    """Wurde etwas (Geist oder Bestzeit) mit der aktuellen Physik UND Map-Version gefahren?"""
+    """Wurde etwas (Geist oder Bestzeit) mit der aktuellen Physik, den aktuellen Regeln
+    UND der aktuellen Map-Version gefahren? (Regel R8: sonst nicht vergleichen)"""
     return (info.get("physics_version") == PHYSICS_VERSION
+            and info.get("rules_version", 1) == RULES_VERSION
             and info.get("track_version", 1) == track_version(map_id))
 
 
@@ -163,7 +166,8 @@ def submit_time(map_id, finish_time, ghost_path):
     if old is not None and not current:
         records.setdefault("alte_rekorde", []).append({"map": map_id, **old})
     records[map_id] = {"time": finish_time, "ghost": str(ghost_path), "physics_version": PHYSICS_VERSION,
-                       "track_version": track_version(map_id), "date": time.strftime("%Y-%m-%d %H:%M:%S")}
+                       "rules_version": RULES_VERSION, "track_version": track_version(map_id),
+                       "date": time.strftime("%Y-%m-%d %H:%M:%S")}
     RECORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
     RECORDS_FILE.write_text(json.dumps(records, indent=2))
     return True

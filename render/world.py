@@ -12,7 +12,7 @@ from ursina import AmbientLight, DirectionalLight, Entity, Mesh, Sky, Texture, V
 from ursina.shaders import lit_with_shadows_shader, unlit_shader
 
 from game.raycast import cast_rays
-from game.sim import RAY_ANGLES, RAY_RANGE
+from game.sim import RAY_ANGLES, RAY_RANGE, format_delta, format_time  # noqa: F401 (für play.py)
 
 WALL_HEIGHT = 1.4
 WALL_THICK = 0.8
@@ -443,10 +443,3 @@ def lerp_pose(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + dh * t, a[3] + (b[3] - a[3]) * t)
 
 
-def format_time(t):
-    return f"{int(t // 60)}:{t % 60:05.2f}"   # Regel R6: angezeigt auf 0.01 s
-
-
-def format_delta(d):
-    """Differenz zum Geist, z.B. '+0.80 s' (langsamer) oder '-1.25 s' (schneller)."""
-    return f"{d:+.2f} s"

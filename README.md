@@ -19,14 +19,18 @@ python3 -m venv .venv
 | `.venv/bin/python replay.py ghosts/<datei>.json` | Geist als MP4 mit Kinokamera rendern (`videos/`) |
 | `.venv/bin/python tools/list_ghosts.py` | Alle Geister mit Versuchszahl und Zeit auflisten |
 | `.venv/bin/python tools/autopilot_run.py` | Testfahrt ohne Grafik, speichert einen Geist |
+| `.venv/bin/python check_ready.py` | Prüft, ob die Simulation regelkonform und bereit fürs Training ist (OK/FEHLER je Prüfung) |
 | `.venv/bin/python -m pytest` | Automatische Tests (u.a. Determinismus) |
 
 **Steuerung:** W/S oder Pfeile = Gas/Bremse, A/D = Lenken (leicht geglättet), Leertaste = Drift, R/Backspace = Neustart,
-C = Kamera, V = KI-Sensoren, Esc = Beenden.
+C = Kamera, V = KI-Sensoren, Tab/F3 = Debug-Anzeige, Esc = Beenden.
 **Gamepad:** linker Stick = Lenken (stufenlos), RT = Gas, LT = Bremse, X/RB = Drift, Y/Start = Neustart.
 Bremse im Stand = rückwärts.
 
 ## Aufbau
+Alle Physik-Werte, Regel-Grenzen, Sensor-Einstellungen und Versionsnummern stehen in **`config.toml`**.
+Wer dort etwas ändert, erhöht die passende Versionsnummer (Regel R8).
+
 ```
 game/            Simulation, OHNE Grafik (auch fürs KI-Training)
   car.py         Fahrphysik (fester Zeitschritt 1/60 s)
@@ -49,7 +53,7 @@ Eine Aktion ist immer `{"steer": -1..1, "throttle": 0..1, "brake": 0..1, "drift"
 `drift` ist optional: Solange er gedrückt ist, verliert das Heck Grip (zum Driften), beim Gegenlenken gibt es vollen Lenkeinschlag.
 
 ## Wann endet eine Fahrt?
-Gleiche Regeln für Spieler und KI (einstellbar in `game/sim.py`, Klasse `Rules`):
+Gleiche Regeln für Spieler und KI (Werte in `config.toml`, Abschnitt `[regeln]`):
 - **Ziel** erreicht, nachdem alle Checkpoints in der richtigen Reihenfolge durchfahren wurden
 - **Wand berühren beendet die Fahrt nicht.** Das Auto prallt ab, verliert Tempo und fährt weiter. Jede Berührung
   wird gemeldet (`events["wall_hit"]`, `sim.wall_hits`), damit die KI dafür eine Strafe bekommen kann.
@@ -71,12 +75,12 @@ Danach `.venv/bin/python play.py tracks/map02.json`, und der Test `test_track_lo
 ## Geister
 `ghosts/<map>_ai_<versuch>.json` bzw. `ghosts/<map>_player_<datum>.json`. Inhalt: Metadaten (Map, Quelle, Versuch,
 Ergebnis, Endzeit oder Crash mit Fortschritt in %, Zwischenzeiten, Physik-Version) plus Position und Rotation pro Physik-Schritt.
-Ändert sich die Physik, erhöht man `PHYSICS_VERSION` in `game/sim.py`; ändert sich eine Map, erhöht man `"version"` in der Map-Datei.
+Ändern sich Physik, Regeln oder Sensoren, erhöht man die Version in `config.toml` (`[versionen]`); ändert sich eine Map, erhöht man `"version"` in der Map-Datei.
 Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zählen nicht mehr (sie bleiben unter `alte_rekorde` aufgehoben).
 
 ## Für die KI (Phase 2)
 - `Sim.observation()`: 16 Werte, nur Fahrersicht (Regel R5): 11 Raycasts, Tempo vor/seitlich, Lenkradstellung, Winkel zur Strecke.
-  Änderungen daran erhöhen `SENSOR_VERSION` in `game/sim.py`.
+  Änderungen daran erhöhen `sensoren` in `config.toml`.
 - `Sim.progress`: Meter entlang der Strecke (Belohnung = Zuwachs pro Schritt)
 - `events["wall_hit"]` / `events["wall"]`: neue Wandberührung / gerade an der Wand (Strafe)
 - Nach jedem 100. Versuch: `save_ghost(sim, "ai", attempt=n)` und `replay.py` als Subprozess → Video

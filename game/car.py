@@ -8,60 +8,42 @@ lenkt man zu stark für das Tempo, reißt der Grip ab -> das Auto rutscht (unter
 - Koordinaten (x, z), Heading h: Vorwärtsrichtung = (sin h, cos h). h=0 -> Norden (+z).
 - Im Auto gedacht: vx = vorwärts, vy = nach rechts, yaw_rate > 0 = dreht nach rechts.
 
-Wenn du hier Werte änderst, erhöhe PHYSICS_VERSION in sim.py,
-damit alte Geister als "alte Version" erkennbar sind.
+Alle Zahlenwerte stehen in config.toml. Wer dort etwas ändert, erhöht die Physik-Version
+(Regel R8), damit alte Geister als "alte Version" erkennbar sind.
 """
 import math
 
-DT = 1.0 / 60.0
-SUBSTEPS = 4
-GRAVITY = 9.81
+from .config import CONFIG
+
+DT = 1.0 / CONFIG["simulation"]["physik_hz"]
+SUBSTEPS = CONFIG["simulation"]["unterschritte"]
+GRAVITY = CONFIG["simulation"]["gravitation"]
 
 
 class CarParams:
-    # Auto
-    mass = 1200.0            # kg
-    inertia = 2100.0         # kg·m² Drehträgheit (größer = dreht ruhiger ein, aber träger)
-    cg_to_front = 1.25       # m Schwerpunkt -> Vorderachse
-    cg_to_rear = 1.35        # m Schwerpunkt -> Hinterachse
-    cg_height = 0.30         # m Schwerpunkthöhe: beim Bremsen mehr Last vorne (besseres Einlenken)
-    suspension_time = 0.15   # s so lange braucht die Federung, bis sich das Gewicht verlagert hat
-    length = 4.0
-    width = 2.0
+    """Alle Fahrzeug-Werte aus config.toml (Abschnitte auto, antrieb, reifen, lenkung, drift).
 
-    # Antrieb, Bremse, Widerstand
-    engine_power = 240_000.0     # W  (ca. 325 PS)
-    max_drive_force = 11_000.0   # N  Traktionsgrenze beim Anfahren
-    brake_force = 16_000.0       # N  bei voller Bremse
-    reverse_force = 4_000.0      # N  Bremse im Stand = rückwärts
-    max_reverse = 8.0            # m/s
-    drag = 0.95                  # Luftwiderstand  F = drag · v²  -> Topspeed ca. 220 km/h
-    rolling = 40.0               # Rollwiderstand  F = rolling · v
-    engine_brake = 1800.0        # N  Motorbremse, wenn man vom Gas geht
-    downforce = 1.2              # Abtrieb         F = downforce · v²  (etwas mehr Grip bei Tempo)
+    Beispiel: CarParams().grip  ->  1.8
+    """
 
-    # Reifen
-    grip = 1.8                   # Reibwert μ (1.0 = Straßenreifen, 1.5-1.8 = Rennreifen)
-    stiffness_front = 150_000.0  # N/rad wie direkt der Reifen greift (höher = präziser, weniger Schwimmen)
-    stiffness_rear = 200_000.0   # hinten steifer -> Auto ist stabil, leicht untersteuernd
-    slide_grip = 0.85            # Anteil Grip, der vorne bleibt, wenn der Reifen rutscht (über dem Limit)
-    rear_grip_factor = 1.5       # Hinterachse hat immer mehr Grip als vorne -> Auto übersteuert nie,
-                                 # sondern schiebt bei zu viel Tempo über die Vorderräder (untersteuert)
+    SECTIONS = ("auto", "antrieb", "reifen", "lenkung", "drift")
 
-    # Lenkung
-    max_steer = 0.50             # rad maximaler Radeinschlag im Stand (~29°)
-    steer_speed_falloff = 17.0   # m/s: bei diesem Tempo nur noch halber Einschlag (wird schnell kleiner)
-    steer_rate = 5.0             # wie schnell das Lenkrad folgt (1/s, 5 = in 0.2 s von Mitte auf Anschlag)
-
-    # Drift-Modus (Leertaste): Heck verliert Grip, mehr Lenkeinschlag zum Gegensteuern
-    drift_rear_grip = 0.75       # Grip hinten im Drift (statt rear_grip_factor), < 1 -> Heck bricht aus
-    drift_slide_grip = 0.85      # Hinterreifen rutschen im Drift mit diesem Anteil Grip weiter
-    drift_max_steer = 0.60       # rad Lenkeinschlag beim Gegenlenken im Drift, bei jedem Tempo (~35°)
-    drift_rate = 5.0             # wie schnell der Drift-Modus ein-/ausblendet (1/s)
+    def __init__(self):
+        for section in self.SECTIONS:
+            for name, value in CONFIG[section].items():
+                setattr(self, name, value)
 
     @property
     def wheelbase(self):
         return self.cg_to_front + self.cg_to_rear
+
+
+def clip(value, low, high):
+    """Wert in den erlaubten Bereich schneiden (Regel R4). Ungültige Werte (NaN) zählen als 0."""
+    value = float(value)
+    if value != value:   # NaN ist die einzige Zahl, die nicht gleich sich selbst ist
+        return 0.0
+    return max(low, min(high, value))
 
 
 def _tire_force(slip, stiffness, max_force, slide_grip):
@@ -108,13 +90,11 @@ class Car:
 
     def update(self, steer, throttle, brake, drift=0.0, dt=DT):
         """steer -1..1 (links..rechts), throttle 0..1, brake 0..1, drift 0..1 (Leertaste)."""
-        steer = max(-1.0, min(1.0, steer))
-        throttle = max(0.0, min(1.0, throttle))
-        brake = max(0.0, min(1.0, brake))
+        steer, throttle = clip(steer, -1.0, 1.0), clip(throttle, 0.0, 1.0)
+        brake, drift = clip(brake, 0.0, 1.0), clip(drift, 0.0, 1.0)
         # Das Lenkrad folgt der Eingabe nicht sofort, sondern mit begrenzter Geschwindigkeit
         step = self.p.steer_rate * dt
         self.steer += max(-step, min(step, steer - self.steer))
-        drift = max(0.0, min(1.0, drift))
         step = self.p.drift_rate * dt
         self.drift += max(-step, min(step, drift - self.drift))
         for _ in range(SUBSTEPS):

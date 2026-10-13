@@ -5,7 +5,7 @@
     python play.py --best                             # gegen die eigene Bestzeit fahren
 
 Tastatur: W/S oder Pfeile = Gas/Bremse, A/D = Lenken, Leertaste = Drift, R/Backspace = Neustart,
-          C = Kamera, V = KI-Sensoren, Esc = Beenden
+          C = Kamera, V = KI-Sensoren, Tab oder F3 = Debug-Anzeige, Esc = Beenden
 Gamepad:  linker Stick = Lenken (stufenlos), RT = Gas, LT = Bremse, X/RB = Drift, Y/Start = Neustart
 
 Fertige Fahrten (und Crashs ab 5 % Fortschritt) werden als Geist in ghosts/ gespeichert,
@@ -20,12 +20,12 @@ from ursina import Ursina, application, time, window
 
 from game.car import DT
 from game.ghost import Ghost, best_time, save_ghost, submit_time
-from game.sim import END_REASONS, Sim
+from game.sim import END_REASONS, PHYSICS_VERSION, RULES_VERSION, SENSOR_VERSION, Sim
 from game.track import Track
 from render.cameras import CameraRig
 from render.controls import RESTART_KEYS, Controls
 from render.minimap import Minimap
-from render.world import HUD, World, GhostCar, format_delta, format_time, lerp_pose
+from render.world import HUD, World, GhostCar, TextLines, format_delta, format_time, lerp_pose
 
 ap = argparse.ArgumentParser()
 ap.add_argument("track", nargs="?", default="tracks/map01.json")
@@ -51,6 +51,8 @@ if args.best and record:
     ghost_files.append(record["ghost"])
 ghosts = [GhostCar(Ghost(p), i) for i, p in enumerate(ghost_files)]
 minimap = Minimap(track, [g.color for g in ghosts])
+debug = TextLines(position=(-0.86, 0.04), height=0.03)   # Debug-Anzeige, an/aus mit Tab oder F3
+debug.enabled = False
 # Zwischenzeiten werden mit dem ersten gewählten Geist verglichen, sonst mit der eigenen Bestzeit
 reference = ghosts[0].ghost if ghosts else (Ghost(record["ghost"]) if record else None)
 
@@ -141,7 +143,7 @@ def update():
     for g in ghosts:
         info += f"\nGeist: {g.ghost.label} · {g.ghost.result_text}"
     info += f"\nWandberührungen: {sim.wall_hits}"
-    info += f"\nKamera: {rig.mode} [C]   Sensoren [V]"
+    info += f"\nKamera: {rig.mode} [C]   Sensoren [V]   Debug [Tab]"
 
     big = state["message"]
     if state["phase"] == "countdown":
@@ -156,6 +158,8 @@ def update():
         hud.big.set(big, HUD.YELLOW)
     elif sim.time < state.get("wall_until", 0):
         hud.big.set("WAND!", HUD.RED)   # kurzer Hinweis, die Fahrt geht weiter
+    if debug.enabled:
+        show_debug(vf)
     if sim.time < state["split_until"]:
         hud.split.set(state["split_text"], state["split_color"])
     else:
@@ -167,6 +171,21 @@ gc.collect()
 gc.freeze()
 
 
+def show_debug(speed):
+    """Debug-Anzeige: Werte direkt aus der Simulation."""
+    n_cp = len(track.checkpoints)
+    gate = sim.gates[sim.next_gate].name if not sim.done else "–"
+    debug.text = "\n".join([
+        "DEBUG",
+        f"Fortschritt: {sim.progress_pct:5.1f} %  ({sim.progress:.0f} von {track.length * track.laps:.0f} m)",
+        f"Tempo: {speed * 3.6:5.1f} km/h",
+        f"Checkpoint: {min(sim.next_gate, n_cp)}/{n_cp} geschafft, nächstes Tor: {gate}",
+        f"Rundenzeit: {format_time(sim.time)}  ({sim.frame} Physik-Schritte)",
+        f"Versionen: Physik v{PHYSICS_VERSION}, Regeln v{RULES_VERSION}, "
+        f"Sensoren v{SENSOR_VERSION}, Strecke {track.id} v{track.version}",
+    ])
+
+
 def input(key):
     global record
     if key in RESTART_KEYS:
@@ -174,6 +193,8 @@ def input(key):
         restart()
     elif key == "c":
         rig.next_mode()
+    elif key in ("tab", "f3"):
+        debug.enabled = not debug.enabled
     elif key == "v":
         world.rays.enabled = not world.rays.enabled
     elif key == "escape":

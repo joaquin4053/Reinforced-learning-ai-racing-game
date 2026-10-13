@@ -1,0 +1,76 @@
+# Konfiguration der Simulation: alle Physik-Werte, Regel-Grenzen, Sensoren und Versionsnummern.
+#
+# WICHTIG (Regel R8): Wer hier etwas ändert, erhöht die passende Versionsnummer!
+#   [simulation], [auto], [antrieb], [reifen], [lenkung], [drift], [kollision]  -> physik
+#   [regeln]                                                                    -> regeln
+#   [sensoren]                                                                  -> sensoren
+# Die Version einer Strecke steht in der Strecken-Datei selbst (tracks/<map>.json, "version"),
+# damit eine neue Map weiterhin nur eine neue Datei ist.
+
+[versionen]
+physik = 6      # 2: Wand kein Crash, 3: Reifenmodell, 4: Grip-Abriss + Motorbremse, 5: Feinschliff, 6: kein Übersteuern
+regeln = 1
+sensoren = 1
+
+[simulation]
+physik_hz = 60          # Physik-Schritte pro Sekunde (Zeitschritt = 1/60 s)
+unterschritte = 4       # interne Teilschritte pro Physik-Schritt (für stabile Reifenrechnung)
+gravitation = 9.81      # m/s²
+
+[auto]
+mass = 1200.0           # kg
+inertia = 2100.0        # kg·m² Drehträgheit (größer = dreht ruhiger ein, aber träger)
+cg_to_front = 1.25      # m Schwerpunkt -> Vorderachse
+cg_to_rear = 1.35       # m Schwerpunkt -> Hinterachse
+cg_height = 0.30        # m Schwerpunkthöhe: beim Bremsen mehr Last vorne (besseres Einlenken)
+suspension_time = 0.15  # s so lange braucht die Federung, bis sich das Gewicht verlagert hat
+length = 4.0            # m
+width = 2.0             # m
+
+[antrieb]
+engine_power = 240000.0     # W (ca. 325 PS)
+max_drive_force = 11000.0   # N Traktionsgrenze beim Anfahren
+brake_force = 16000.0       # N bei voller Bremse
+reverse_force = 4000.0      # N Bremse im Stand = rückwärts
+max_reverse = 8.0           # m/s
+drag = 0.95                 # Luftwiderstand  F = drag · v²  -> Höchstgeschwindigkeit ca. 190 km/h
+rolling = 40.0              # Rollwiderstand  F = rolling · v
+engine_brake = 1800.0       # N Motorbremse, wenn man vom Gas geht
+downforce = 1.2             # Abtrieb  F = downforce · v²  (etwas mehr Grip bei Tempo)
+
+[reifen]
+grip = 1.8                  # Reibwert μ (1.0 = Straßenreifen, 1.5-1.8 = Rennreifen)
+stiffness_front = 150000.0  # N/rad wie direkt der Reifen greift (höher = präziser)
+stiffness_rear = 200000.0   # hinten steifer -> Auto ist stabil, leicht untersteuernd
+slide_grip = 0.85           # Anteil Grip, der vorne bleibt, wenn der Reifen rutscht
+rear_grip_factor = 1.5      # Hinterachse hat mehr Grip als vorne -> Auto übersteuert nie
+
+[lenkung]
+max_steer = 0.50            # rad maximaler Radeinschlag im Stand (~29°)
+steer_speed_falloff = 17.0  # m/s: bei diesem Tempo nur noch halber Einschlag
+steer_rate = 5.0            # wie schnell das Lenkrad folgt (1/s, 5 = in 0.2 s von Mitte auf Anschlag)
+
+[drift]
+drift_rear_grip = 0.75      # Grip hinten im Drift, < 1 -> Heck bricht aus
+drift_slide_grip = 0.85     # Hinterreifen rutschen im Drift mit diesem Anteil Grip weiter
+drift_max_steer = 0.60      # rad Lenkeinschlag beim Gegenlenken im Drift (~35°)
+drift_rate = 5.0            # wie schnell der Drift-Modus ein-/ausblendet (1/s)
+
+[kollision]
+kreise = [1.1, -1.1]        # Kollisionskreise entlang der Längsachse (vorne/hinten), in m
+radius = 1.05               # m
+abprall = 0.25              # wie stark das Auto von der Wand abprallt
+wandreibung = 0.97          # Tempo-Faktor pro Schritt an der Wand
+
+[regeln]
+wall_is_crash = false       # R2: Wand = abprallen und weiterfahren (wird nur gemeldet)
+stuck_seconds = 2.0         # Fahrt endet, wenn in so vielen Sekunden ...
+stuck_min_progress = 1.0    # ... weniger als so viele Meter Fortschritt
+wrong_way_meters = 15.0     # so weit hinter den eigenen Bestwert zurück = falsche Richtung
+time_limit = 180.0          # Sekunden
+
+[sensoren]
+anzahl_strahlen = 11        # Sensorstrahlen, gleichmäßig verteilt
+winkel_bereich = 180.0      # Grad, von links (-90°) bis rechts (+90°)
+reichweite = 100.0          # m (R5: nichts hinter der Sensorreichweite)
+tempo_norm = 50.0           # m/s, Tempo wird für die KI durch diesen Wert geteilt
