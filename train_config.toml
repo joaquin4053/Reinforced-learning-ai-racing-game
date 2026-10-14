@@ -1,0 +1,53 @@
+# Einstellungen für das Training (train.py).
+#
+# Beim Start eines NEUEN Trainings werden [sac], [ablauf] und [erfolg] nach runs/<name>/config.json kopiert.
+# Beim Fortsetzen (--resume) gilt immer diese Kopie (Regel R9), damit ein Training mit denselben Werten
+# weiterläuft. Änderungen hier wirken also nur auf neue Trainings.
+# [ressourcen] und [profile] betreffen nur, wie stark der Mac belastet wird (nicht, was die KI lernt),
+# und werden bei jedem Start frisch von hier gelesen.
+
+[sac]
+lernrate = 0.0003
+puffer = 300_000              # Replay-Buffer: so viele Schritte merkt sich die KI (ca. 60 MB Arbeitsspeicher)
+batch = 256                   # Schritte pro Lern-Update
+gamma = 0.995                 # wie weit die KI vorausdenkt: ca. 1/(1-gamma) = 200 Schritte = 3.3 s
+tau = 0.005                   # wie schnell die Ziel-Netze nachgeführt werden
+lernstart = 10_000            # so viele Schritte zufällig fahren, bevor das Lernen beginnt
+updates_pro_schritt = 0.25    # Lern-Updates pro gesammeltem Schritt, unabhängig vom Profil
+netz = [64, 64]               # 2 Schichten mit je 64 Neuronen, für Actor und Critic
+
+[ablauf]
+auswertung_alle_schritte = 25_000     # deterministische Testfahrt (R6), ergibt die offiziellen Zeiten
+snapshot_alle_schritte = 250_000      # Modell-Kopie in runs/<name>/snapshots/
+tensorboard_alle_schritte = 5_000     # so oft werden Kurven für TensorBoard geschrieben
+
+[erfolg]
+zuverlaessig_serie = 5                # Stufe 2: so viele Auswertungen in Folge im Ziel
+plateau_schritte = 2_000_000          # Stufe 3: in so vielen Schritten ...
+plateau_sekunden = 0.1                # ... ist die Bestzeit um weniger als so viel besser geworden
+
+[ressourcen]
+sicherung_minuten = 30                # automatischer Fortsetzungspunkt (zusätzlich bei jeder Pause)
+akku_minimum = 30                     # Prozent: darunter wird pausiert (nur im Akkubetrieb)
+speicher_minimum_gb = 10              # freier Platz auf der Festplatte, darunter wird pausiert
+pruefen_sekunden = 30                 # so oft werden Akku und Festplatte geprüft
+
+# Leistungsprofile (--profil). "umgebungen" = Autos, die gleichzeitig Erfahrung sammeln (eigene Prozesse ab 3).
+# "halb" = Hälfte der Prozessorkerne, "alle-1" = alle Kerne ausser einem.
+# threads = Rechen-Threads fürs Netz. Gemessen auf dem M5: 1 Thread ist am schnellsten, weil das Netz so klein
+# ist, dass sich das Aufteilen nicht lohnt (1 Thread 830, 2 Threads 780 Schritte/s).
+# prioritaet = nice-Wert (0 = normal, 19 = niedrigste). Kann während eines Trainings nur erhöht werden.
+[profile.sparsam]
+umgebungen = 2
+threads = 1
+prioritaet = 15
+
+[profile.normal]
+umgebungen = "halb"
+threads = 1
+prioritaet = 10
+
+[profile.voll]
+umgebungen = "alle-1"
+threads = 1
+prioritaet = 0

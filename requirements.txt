@@ -3,7 +3,10 @@ numpy
 pillow
 imageio
 imageio-ffmpeg
-# Phase 2 (KI-Training):
+# KI-Training:
 gymnasium
-# stable-baselines3
+stable-baselines3
+torch
+tensorboard
+psutil
 pytest

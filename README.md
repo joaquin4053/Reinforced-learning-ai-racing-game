@@ -21,6 +21,8 @@ python3 -m venv .venv
 | `.venv/bin/python tools/autopilot_run.py` | Testfahrt ohne Grafik, speichert einen Geist |
 | `.venv/bin/python check_ready.py` | Prüft, ob die Simulation regelkonform und bereit fürs Training ist (OK/FEHLER je Prüfung) |
 | `.venv/bin/python -m pytest` | Automatische Tests (u.a. Determinismus) |
+| `.venv/bin/python train.py --name test1` | KI trainieren (siehe [Training](#training)) |
+| `.venv/bin/python watch.py test1` | Der KI beim Fahren zuschauen |
 
 **Steuerung:** W/S oder Pfeile = Gas/Bremse, A/D = Lenken (leicht geglättet), Leertaste = Drift, R/Backspace = Neustart,
 C = Kamera, V = KI-Sensoren, Tab/F3 = Debug-Anzeige, Esc = Beenden.
@@ -44,7 +46,13 @@ render/          Darstellung (rechnet keine Physik)
   controls.py    Tastatur/Gamepad -> action
   cameras.py     Verfolger, Cockpit, Vogel, Kinokamera
   recorder.py    Geist -> MP4
+rl/              KI: Gym-Umgebung, Reward, Training
+  env.py         RaceEnv (Gymnasium)
+  trainer.py     SAC-Training, Auswertung, Erfolgsstufen, Pausieren
+  run.py         Ordner runs/<name>/: Konfiguration, summary.csv, Fortsetzungspunkt
+  resources.py   Leistungsprofile, Akku-/Speicher-Wächter
 tracks/          Maps (JSON)
+runs/            Trainings (je ein Ordner)
 ghosts/          gespeicherte Fahrten (Spieler und KI)
 saves/           Bestzeiten
 tests/           automatische Tests
@@ -86,3 +94,75 @@ Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zä
   `.venv/bin/python tools/reward_example.py`
 - **Regel-Fahrer** `rl/rule_driver.py`: fährt nur mit den Sensoren der KI eine gültige Runde (Vergleichswert).
 - `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5), Code in `game/sensors.py`.
+
+## Training
+Lernverfahren: **SAC** (Stable-Baselines3), kleines Netz mit 2 Schichten à 64 Neuronen für Actor und Critic.
+Einstellungen in `train_config.toml`.
+
+### Installieren und starten
+```bash
+.venv/bin/python -m pip install -r requirements.txt     # einmalig (torch, stable-baselines3, tensorboard, psutil)
+.venv/bin/python train.py --name test1                  # neues Training, läuft bis Ctrl+C
+```
+Der Mac bleibt automatisch wach, solange das Training läuft (`train.py` startet dafür `caffeinate -i`).
+**Deckel offen lassen**: Zugeklappt schläft ein MacBook trotzdem ein. Für eine Nacht am besten ans Netzteil.
+
+### Während es läuft
+Die Statuszeile zeigt Versuch, offizielle Bestzeit, Erfolgsstufe, Schritte, Schritte/s, Laufzeit und Profil.
+Neue Bestzeiten und erreichte Stufen werden zusätzlich als eigene Zeile gemeldet.
+
+TensorBoard (Kurven im Browser, in einem zweiten Terminal):
+```bash
+.venv/bin/tensorboard --logdir runs        # dann http://localhost:6006 öffnen
+```
+Wichtige Kurven: `auswertung/bestzeit`, `auswertung/gueltig`, `training/anteil_gueltig_letzte_100`,
+`fahrt/reward`. Steigt `fahrt/reward`, ohne dass Runden gültiger oder schneller werden: Training stoppen (Regel R7).
+
+### Pausieren und fortsetzen
+- **Ctrl+C** pausiert sauber: Modell, Replay-Buffer, Zähler und Zufallszustand werden gespeichert.
+  Ein zweites Ctrl+C bricht sofort ab, ohne zu speichern.
+- Weitermachen: `.venv/bin/python train.py --name test1 --resume`. Versuchszähler, Schritte, Snapshots, `summary.csv`
+  und TensorBoard laufen nahtlos weiter. Nur die gerade angefangenen Fahrten beginnen neu am Start.
+- Alle 30 min wird automatisch ein Fortsetzungspunkt gespeichert. Bei einem Absturz oder leerem Akku
+  sind also höchstens 30 min verloren.
+- Haben sich seit dem Start Physik, Regeln, Sensoren, Strecke oder Reward geändert, verweigert `--resume`
+  das Fortsetzen (Regel R8). Dann ein neues Training mit neuem Namen starten.
+
+### Leistungsprofile
+`--profil sparsam | normal | voll` (Standard: normal), beim Fortsetzen frei wechselbar.
+
+| Profil | Umgebungen | Priorität | Gedacht für |
+|---|---|---|---|
+| sparsam | 2 | niedrig (nice 15) | nebenbei arbeiten, Akku |
+| normal | Hälfte der Kerne | mittel (nice 10) | Mac wird nebenbei benutzt |
+| voll | alle Kerne ausser einem | normal | über Nacht am Netzteil |
+
+- `--max-sps 1000`: höchstens 1000 Schritte pro Sekunde (bremst zusätzlich).
+- Die KI lernt in jedem Profil gleich (gleich viele Lern-Updates pro Schritt), sie ist nur unterschiedlich schnell.
+- **Akkubetrieb:** automatisch sparsam. Am Netzteil wieder das gewählte Profil.
+  Unter 30 % Akku pausiert das Training (Fortsetzungspunkt wird gespeichert).
+- **Festplatte:** Wenn weniger als 10 GB frei sind, pausiert das Training.
+- Weitere Optionen: `--minuten 30` (nach 30 min pausieren), `--schritte 500000`, `--seed 1` (nur bei neuem Training).
+
+### Was gespeichert wird (`runs/<name>/`)
+| Datei | Inhalt |
+|---|---|
+| `config.json` | vollständige Konfiguration (SAC, Reward, Physik, Strecke), Seed, alle Versionen, Git-Commit (R9) |
+| `code.tar.gz` | Kopie des Codes, falls er vom Git-Commit abweicht |
+| `summary.csv` | jede Auswertung und jedes Ereignis (Start, Pause, Fortsetzung, Profilwechsel, Stufe) |
+| `best_model.zip` | Modell der offiziellen Bestzeit |
+| `ghosts/` | Fahrt der offiziellen Bestzeit als Geist (`play.py --ghost ...`, `replay.py ...`) |
+| `snapshots/` | Modell alle 250'000 Schritte |
+| `checkpoint/` | Fortsetzungspunkt |
+| `tb/` | TensorBoard |
+
+**Offizielle Zeiten** (R6) kommen nur aus der **Auswertung**: Alle 25'000 Schritte fährt das aktuelle Modell
+eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur für Stufe 1.
+
+### Zuschauen
+```bash
+.venv/bin/python watch.py test1                  # Modell der offiziellen Bestzeit
+.venv/bin/python watch.py test1 --modell letzter # letzter Fortsetzungspunkt
+.venv/bin/python watch.py test1 --gegen-mich     # gegen deine Bestzeit als Geist
+```
+R = nochmal, C = Kamera, V = Sensorstrahlen, Esc = Beenden. Läuft auch, während das Training weiterläuft.
