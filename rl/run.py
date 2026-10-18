@@ -4,6 +4,9 @@ runs/<name>/
   config.json        vollständige Konfiguration, Seed, alle Versionen, Git-Commit (beim Start geschrieben)
   summary.csv        eine Zeile pro Auswertung und pro Ereignis (Start, Pause, Fortsetzung, Profilwechsel, ...)
   checkpoint/        Fortsetzungspunkt: Modell, Replay-Buffer, Zähler, Zufallszustand
+  live_model.zip     Modell der letzten Auswertung (alle 25'000 Schritte), für watch.py --live
+  live.json          Stand dazu: Schritte, Versuche, Ergebnis der Auswertung
+  rekorde.json       Bestzeit und Erfolgsstufen, sofort bei jeder Änderung geschrieben (überlebt Abstürze)
   best_model.zip     Modell der offiziellen Bestzeit (deterministische Auswertung, R6)
   ghosts/            Fahrt der offiziellen Bestzeit als Geist (für play.py --ghost / replay.py)
   snapshots/         Modell-Kopien alle N Schritte
@@ -68,6 +71,9 @@ class Run:
         self.snapshot_dir = self.dir / "snapshots"
         self.ghost_dir = self.dir / "ghosts"
         self.best_model = self.dir / "best_model.zip"
+        self.records_file = self.dir / "rekorde.json"
+        self.live_model = self.dir / "live_model.zip"
+        self.live_file = self.dir / "live.json"
 
     @property
     def exists(self):
@@ -94,6 +100,34 @@ class Run:
             if new:
                 w.writeheader()
             w.writerow({k: _fmt(v) for k, v in row.items()})
+
+    def last_logged_steps(self):
+        """Schritte in der letzten Zeile von summary.csv (0, wenn es keine gibt)."""
+        if not self.summary_file.exists():
+            return 0
+        rows = list(csv.DictReader(open(self.summary_file)))
+        return int(rows[-1]["schritte"]) if rows else 0
+
+    def save_live(self, model, info):
+        """Aktuelles Modell für watch.py --live. Erst das Modell, dann live.json (so passt beides immer zusammen)."""
+        tmp = self.dir / "live_model.tmp.zip"
+        model.save(tmp)
+        tmp.replace(self.live_model)
+        tmp = self.live_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(info, ensure_ascii=False))
+        tmp.replace(self.live_file)
+
+    # ---------- Rekorde (unabhängig vom Fortsetzungspunkt) ----------
+    def save_records(self, records):
+        tmp = self.records_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(records, indent=2, ensure_ascii=False))
+        tmp.replace(self.records_file)
+
+    def load_records(self):
+        try:
+            return json.loads(self.records_file.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
     # ---------- Fortsetzungspunkt ----------
     def save_checkpoint(self, model, state):

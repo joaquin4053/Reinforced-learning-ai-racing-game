@@ -121,6 +121,10 @@ Wichtige Kurven: `auswertung/bestzeit`, `auswertung/gueltig`, `training/anteil_g
 ### Pausieren und fortsetzen
 - **Ctrl+C** pausiert sauber: Modell, Replay-Buffer, Zähler und Zufallszustand werden gespeichert.
   Ein zweites Ctrl+C bricht sofort ab, ohne zu speichern.
+- **Terminal-Fenster schliessen** pausiert ebenfalls sauber (wie Ctrl+C).
+- Bestzeit und Erfolgsstufen stehen sofort in `rekorde.json`. Endet das Training trotzdem einmal ohne Pause
+  (Absturz, Strom weg), gehen nur die Schritte seit der letzten Sicherung verloren, Bestzeit und Stufen nicht.
+  `summary.csv` vermerkt das beim Fortsetzen als `absturz`.
 - Weitermachen: `.venv/bin/python train.py --name test1 --resume`. Versuchszähler, Schritte, Snapshots, `summary.csv`
   und TensorBoard laufen nahtlos weiter. Nur die gerade angefangenen Fahrten beginnen neu am Start.
 - Alle 30 min wird automatisch ein Fortsetzungspunkt gespeichert. Bei einem Absturz oder leerem Akku
@@ -161,7 +165,9 @@ eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur f
 
 ### Zuschauen
 ```bash
+.venv/bin/python watch.py test1 --live           # LIVE: nach jeder Runde der neueste Stand des Trainings
 .venv/bin/python watch.py test1                  # Modell der offiziellen Bestzeit
+.venv/bin/python watch.py test1 --modell neuester # jüngstes Modell (Snapshot alle 250'000 Schritte)
 .venv/bin/python watch.py test1 --modell letzter # letzter Fortsetzungspunkt
 .venv/bin/python watch.py test1 --gegen-mich     # gegen deine Bestzeit als Geist
 ```

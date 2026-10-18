@@ -5,6 +5,7 @@ train.py liest nur die Befehlszeile und ruft Trainer auf. Ablauf:
   - alle N Schritte fährt das aktuelle Modell eine deterministische Runde (R6) -> offizielle Zeiten
   - Fortsetzungspunkt alle 30 min und bei jeder Pause (Ctrl+C, Akku, Festplatte)
 """
+import os
 import signal
 import sys
 import time
@@ -28,8 +29,9 @@ SUBPROCESS_FROM = 3       # ab so vielen Umgebungen bekommt jede ihren eigenen P
 # ---------- Umgebungen ----------
 def _env_factory(reward_cfg, in_subprocess):
     def init():
-        if in_subprocess:   # Ctrl+C beendet nur das Hauptprogramm, das dann sauber pausiert
+        if in_subprocess:   # Ctrl+C / Fenster schliessen trifft nur das Hauptprogramm, das dann sauber pausiert
             signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
         return RaceEnv(config=reward_cfg)
     return init
 
@@ -133,6 +135,22 @@ class Trainer:
         self._set_schedule()
         self.state = self.run.load_state(cp_dir)
         self.run.restore_rng(cp_dir)
+        self._merge_records()
+
+    def _records(self):
+        st = self.state
+        return {k: st.get(k) for k in ("bestzeit", "bestzeit_schritte", "bestzeit_versuch", "bestzeit_geist",
+                                       "bestzeit_verlauf", "stufen")}
+
+    def _merge_records(self):
+        """Bestzeit und Stufen aus rekorde.json übernehmen, falls sie nach dem Fortsetzungspunkt entstanden sind
+        (z.B. Programm ohne Pause beendet). Sonst würde best_model.zip später von einer schlechteren Zeit überschrieben."""
+        rec, st = self.run.load_records(), self.state
+        if rec.get("bestzeit") is not None and (st["bestzeit"] is None or rec["bestzeit"] < st["bestzeit"]):
+            st.update({k: rec.get(k) for k in ("bestzeit", "bestzeit_schritte", "bestzeit_versuch", "bestzeit_geist",
+                                               "bestzeit_verlauf")})
+        for k, v in rec.get("stufen", {}).items():
+            st["stufen"].setdefault(k, v)
 
     def _set_schedule(self):
         freq, grads = update_schedule(self.profile.envs, self.cfg["sac"]["updates_pro_schritt"])
@@ -179,7 +197,10 @@ class Trainer:
                 self.stop_reason = None
                 self.switch_profile(name, why)
         self.save("pause", self.stop_reason)
-        self.env.close()
+        try:
+            self.env.close()
+        except (OSError, EOFError):
+            pass
         return self.stop_reason
 
     def on_step(self, hook):
@@ -253,9 +274,10 @@ class Trainer:
             ghost = save_ghost(sim, "ai", attempt=st["versuche"], driver=f"KI {self.run.name}",
                                folder=self.run.ghost_dir)
             st["bestzeit_geist"] = str(ghost)
+            self.run.save_records(self._records())
             note = "neue offizielle Bestzeit" + (f" (vorher {format_time(old)})" if old else "")
-            self.say(f"Neue offizielle Bestzeit: {format_time(t)}  (Schritt {self.steps:,}, Versuch {st['versuche']})"
-                     .replace(",", "'"))
+            self.say(f"Neue offizielle Bestzeit: {format_time(t)}  (Schritt {self.steps:,}".replace(",", "'")
+                     + f", Versuch {st['versuche']})")
         if valid:
             self.model.logger.record("auswertung/rundenzeit", t)
         self.model.logger.record("auswertung/gueltig", float(valid))
@@ -264,6 +286,10 @@ class Trainer:
             self.model.logger.record("auswertung/bestzeit", st["bestzeit"])
         self._log("auswertung", gueltig=valid, rundenzeit=t, fortschritt_pct=info["fortschritt_prozent"],
                   ende=info["ende"], wandberuehrungen=info["wandberuehrungen"], bemerkung=note)
+        self.run.save_live(self.model, {"schritte": self.steps, "versuche": st["versuche"], "gueltig": valid,
+                                        "rundenzeit": t, "fortschritt_pct": info["fortschritt_prozent"],
+                                        "ende": info["ende"], "bestzeit": st["bestzeit"], "stufe": self.stage,
+                                        "zeit": time.strftime("%Y-%m-%d %H:%M:%S")})
         self._check_stages()
 
     # ---------- Erfolgsstufen (CLAUDE.md) ----------
@@ -276,6 +302,7 @@ class Trainer:
             return
         self.state["stufen"][str(n)] = {"schritte": self.steps, "versuch": self.state["versuche"],
                                         "datum": time.strftime("%Y-%m-%d %H:%M:%S"), "text": text}
+        self.run.save_records(self._records())
         self.say(f"*** Stufe {n} erreicht: {STAGE_TEXT[n]} – {text}")
         self._log("stufe", bemerkung=f"Stufe {n} ({STAGE_TEXT[n]}): {text}")
 
@@ -360,22 +387,34 @@ class Trainer:
         text = (f"Versuch {st['versuche']:,} | Bestzeit {best} | {stage} | Schritte {self.steps:,} | "
                 f"{self._sps():,.0f}/s | Laufzeit {_hms(self.laufzeit)} | {self.profile.name}"
                 + (f" ({power.text})" if power else "")).replace(",", "'")
-        sys.stdout.write("\r\033[K" + text)
-        sys.stdout.flush()
+        _write("\r\033[K" + text)
 
     def say(self, text):
-        sys.stdout.write("\r\033[K" + text + "\n")
-        sys.stdout.flush()
+        _write("\r\033[K" + text + "\n")
 
     def _install_signals(self):
 
+        reasons = {signal.SIGINT: "Ctrl+C", signal.SIGTERM: "beendet", signal.SIGHUP: "Terminal-Fenster geschlossen"}
+
         def handler(signum, frame):
-            if self.stop_reason and not self.stop_reason.startswith("profil:"):
+            paused = self.stop_reason and not self.stop_reason.startswith("profil:")
+            if paused and signum == signal.SIGINT:
                 raise KeyboardInterrupt      # zweites Ctrl+C: sofort abbrechen (ohne Speichern)
-            self.stop_reason = "Ctrl+C" if signum == signal.SIGINT else "beendet"
-            self.say("Pause angefordert – speichere den Fortsetzungspunkt ... (nochmal Ctrl+C = ohne Speichern abbrechen)")
-        signal.signal(signal.SIGINT, handler)
-        signal.signal(signal.SIGTERM, handler)
+            if not paused:
+                self.stop_reason = reasons[signum]
+                self.say("Pause angefordert – speichere den Fortsetzungspunkt ... "
+                         "(nochmal Ctrl+C = ohne Speichern abbrechen)")
+        for sig in reasons:
+            signal.signal(sig, handler)
+
+
+def _write(text):
+    """Auf das Terminal schreiben. Ist das Fenster schon zu, ins Leere (das Speichern darf daran nicht scheitern)."""
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except OSError:
+        sys.stdout = open(os.devnull, "w")
 
 
 def _hms(seconds):

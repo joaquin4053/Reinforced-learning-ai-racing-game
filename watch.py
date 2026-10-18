@@ -1,6 +1,8 @@
 """Der KI beim Fahren zuschauen: lädt ein Modell und fährt deterministisch (ohne Zufall, R6) mit Grafik.
 
+    .venv/bin/python watch.py test1 --live              # LIVE: nach jeder Runde das neueste Modell aus dem laufenden Training
     .venv/bin/python watch.py test1                     # offizielles Bestzeit-Modell (sonst letzter Stand)
+    .venv/bin/python watch.py test1 --modell neuester   # jüngstes gespeichertes Modell (Snapshot, Bestzeit, Fortsetzungspunkt)
     .venv/bin/python watch.py test1 --modell letzter    # letzter Fortsetzungspunkt
     .venv/bin/python watch.py test1 --modell runs/test1/snapshots/model_0000250000.zip
     .venv/bin/python watch.py test1 --gegen-mich        # mit deiner Bestzeit als Geist
@@ -17,7 +19,8 @@ ROOT = Path(__file__).resolve().parent
 
 ap = argparse.ArgumentParser()
 ap.add_argument("name", help="Name des Trainings (Ordner runs/<name>/)")
-ap.add_argument("--modell", default="best", help="best, letzter oder Pfad zu einer .zip-Datei")
+ap.add_argument("--modell", default="best", help="best, neuester, letzter oder Pfad zu einer .zip-Datei")
+ap.add_argument("--live", action="store_true", help="nach jeder Runde das neueste Modell des laufenden Trainings laden")
 ap.add_argument("--gegen-mich", action="store_true", help="eigene Bestzeit als Geist mitfahren lassen")
 ap.add_argument("--ghost", action="append", default=[], help="weitere Geist-Datei (mehrfach möglich)")
 args = ap.parse_args()
@@ -27,10 +30,20 @@ if not (run_dir / "config.json").exists():
     sys.exit(f"Training '{args.name}' nicht gefunden (runs/{args.name}/config.json fehlt).")
 cfg = json.loads((run_dir / "config.json").read_text())
 cp = next((d for d in (run_dir / "checkpoint", run_dir / "checkpoint.alt") if (d / "model.zip").exists()), None)
-if args.modell == "best":
+live_file = run_dir / "live.json"
+if args.live:
+    model_path = run_dir / "live_model.zip"
+    if not model_path.exists() or not live_file.exists():
+        sys.exit("Noch kein Live-Modell. Es entsteht bei der nächsten Auswertung (alle 25'000 Schritte). Läuft das\n"
+                 "Training noch mit altem Code: einmal Ctrl+C und mit --resume neu starten.")
+elif args.modell == "best":
     model_path = run_dir / "best_model.zip" if (run_dir / "best_model.zip").exists() else cp and cp / "model.zip"
     if model_path and model_path.parent == cp:
         print("Noch keine offizielle Bestzeit – zeige den letzten Stand.")
+elif args.modell == "neuester":
+    candidates = [*(run_dir / "snapshots").glob("*.zip"), run_dir / "best_model.zip", *([cp / "model.zip"] if cp else [])]
+    candidates = [p for p in candidates if p.exists()]
+    model_path = max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 elif args.modell == "letzter":
     model_path = cp and cp / "model.zip"
 else:
@@ -49,6 +62,7 @@ if env.versions["sensoren"] != cfg["versionen"]["sensoren"]:
     sys.exit("Die Sensoren haben sich seit dem Training geändert – dieses Modell passt nicht mehr (R8).")
 other = [k for k, v in env.versions.items() if cfg["versionen"].get(k) != v]
 model = SAC.load(model_path, device="cpu")
+live = json.loads(live_file.read_text()) if args.live else None
 state = {}
 state_file = (cp / "state.json") if cp else None
 if state_file and state_file.exists():
@@ -81,7 +95,20 @@ if args.gegen_mich and mine:
 ghosts = [GhostCar(Ghost(p), i) for i, p in enumerate(ghost_files)]
 minimap = Minimap(track, [g.color for g in ghosts])
 
-st = {"obs": None, "acc": 0.0, "prev": None, "message": "", "wait": 1.0}
+st = {"obs": None, "acc": 0.0, "prev": None, "message": "", "wait": 1.0, "end_wait": None}
+LIVE_PAUSE = 2.0      # so lange bleibt das Ergebnis stehen, dann kommt der nächste Stand
+
+
+def load_live():
+    """Neuestes Modell des Trainings laden, falls es seit der letzten Runde ein neues gibt."""
+    global model, live
+    try:
+        info = json.loads(live_file.read_text())
+        if info["schritte"] != live["schritte"]:
+            model = SAC.load(model_path, device="cpu")
+            live = info
+    except (OSError, ValueError, KeyError):
+        pass          # Training schreibt gerade -> beim nächsten Mal
 
 
 def pose():
@@ -94,7 +121,7 @@ def restart():
     for g in ghosts:
         g.reset()
     rig.first = True
-    st.update(obs=obs, acc=0.0, prev=pose(), message="", wait=1.0)
+    st.update(obs=obs, acc=0.0, prev=pose(), message="", wait=1.0, end_wait=None)
 
 
 def on_end(info):
@@ -105,10 +132,19 @@ def on_end(info):
             text += f"\nDu: {format_time(mine['time'])}  ({t - mine['time']:+.2f} s)"
     else:
         text = f"{info['ende'].upper()}\n{info['fortschritt_prozent']:.0f} % geschafft"
-    st["message"] = text + "\n[R] nochmal"
+    if args.live:
+        st["end_wait"] = LIVE_PAUSE
+        st["message"] = text + "\ngleich: neuester Stand"
+    else:
+        st["message"] = text + "\n[R] nochmal"
 
 
 def update():
+    if st["end_wait"] is not None:
+        st["end_wait"] -= time.dt
+        if st["end_wait"] <= 0:
+            load_live()
+            restart()
     if st["wait"] > 0:                       # kurz stehen, damit man den Start sieht
         st["wait"] -= time.dt
     elif not sim.done:
@@ -132,8 +168,14 @@ def update():
         g.show_frame(sim.frame - 1 + alpha)
     minimap.update(x, z, heading, [(g.model.x, g.model.z) for g in ghosts])
 
-    lines = [track.name, f"Modell: {model_label}"]
-    if state:
+    lines = [track.name]
+    if live:
+        lines.append(f"LIVE · Stand: Schritt {live['schritte']:,} · Versuch {live['versuche']:,}".replace(",", "'"))
+        best = live.get("bestzeit")
+        lines.append(f"Offizielle KI-Bestzeit: {format_time(best) if best is not None else '–'}   Stufe {live.get('stufe', 0)}")
+    else:
+        lines.append(f"Modell: {model_label}")
+    if state and not live:
         best = state.get("bestzeit")
         lines.append(f"Offizielle KI-Bestzeit: {format_time(best) if best is not None else '–'}"
                      f"   ({state.get('schritte', 0):,} Schritte, {state.get('versuche', 0):,} Versuche)".replace(",", "'"))

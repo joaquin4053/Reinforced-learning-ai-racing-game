@@ -97,6 +97,14 @@ def main():
                       max_sps=args.max_sps, stop_steps=args.schritte, stop_minutes=args.minuten)
     if args.resume:
         trainer.resume(cp)
+        lost = run.last_logged_steps() - trainer.steps
+        if lost > 0:      # nach der letzten Sicherung lief das Training noch weiter, wurde aber nicht gespeichert
+            n_lost, n_from = f"{lost:,}".replace(",", "'"), f"{trainer.steps:,}".replace(",", "'")
+            trainer._log("absturz", bemerkung=f"ohne Pause beendet: {n_lost} Schritte seit der letzten Sicherung "
+                                              f"verloren, weiter ab {n_from}")
+            print(f"Achtung: Das Training wurde zuletzt ohne Pause beendet. {n_lost} Schritte seit der letzten "
+                  f"Sicherung sind verloren, es geht ab {n_from} weiter.")
+            print("Bestzeit und Erfolgsstufen von danach bleiben erhalten (rekorde.json).")
         event = "fortsetzung"
         note = f"von {cp.name}, Commit {(git['commit'] or '?')[:7]}"
         if git["commit"] != cfg["git"]["commit"]:

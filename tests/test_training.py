@@ -93,4 +93,22 @@ def test_pause_and_resume_with_other_profile(tmp_path, monkeypatch):
     assert [r["ereignis"] for r in rows if r["ereignis"] not in ("auswertung", "profilwechsel")] == ["pause", "pause"]
     assert all(r["rundenzeit"] == "" or r["gueltig"] == "ja" for r in rows)   # Zeit nur bei gültiger Runde
     assert list((run.dir / "snapshots").glob("*.zip"))
+    live = json.loads(run.live_file.read_text())                       # für watch.py --live
+    assert live["schritte"] == st2["letzte_auswertung"] and run.live_model.exists()
     json.loads((run.checkpoint_dir / "state.json").read_text())
+
+
+def test_resume_keeps_records_from_after_checkpoint(tmp_path, monkeypatch):
+    """Training ohne Pause beendet: Bestzeit/Stufen nach der letzten Sicherung dürfen nicht verloren gehen."""
+    monkeypatch.setattr("rl.run.RUNS_DIR", tmp_path)
+    run = Run("t")
+    run.create(SMALL)
+    reward = load_reward_config()
+    t1 = Trainer(run, SMALL, reward, RES, _profiles(1), "sparsam", stop_steps=300)
+    t1.new(seed=0)
+    t1.train({})
+    run.save_records({"bestzeit": 30.0, "bestzeit_schritte": 9999, "bestzeit_versuch": 50, "bestzeit_geist": "x.json",
+                      "bestzeit_verlauf": [[9999, 30.0]], "stufen": {"4": {"schritte": 9999}}})
+    t2 = Trainer(run, SMALL, reward, RES, _profiles(1), "sparsam")
+    t2.resume(run.find_checkpoint())
+    assert t2.state["bestzeit"] == 30.0 and "4" in t2.state["stufen"] and t2.stage == 4
