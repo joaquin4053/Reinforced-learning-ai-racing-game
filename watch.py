@@ -2,9 +2,9 @@
 
     .venv/bin/python watch.py test1 --live              # LIVE: nach jeder Runde das neueste Modell aus dem laufenden Training
     .venv/bin/python watch.py test1                     # offizielles Bestzeit-Modell (sonst letzter Stand)
-    .venv/bin/python watch.py test1 --modell neuester   # jüngstes gespeichertes Modell (Snapshot, Bestzeit, Fortsetzungspunkt)
+    .venv/bin/python watch.py test1 --modell neuester   # jüngstes gespeichertes Modell (Version, Bestzeit, Fortsetzungspunkt)
     .venv/bin/python watch.py test1 --modell letzter    # letzter Fortsetzungspunkt
-    .venv/bin/python watch.py test1 --modell runs/test1/snapshots/model_0000250000.zip
+    .venv/bin/python watch.py test1 --modell runs/test1/versionen/model_0000250000.zip
     .venv/bin/python watch.py test1 --gegen-mich        # mit deiner Bestzeit als Geist
 
 Tasten: R = nochmal, N/L = neueste Version sofort, Z = Zeitleiste ein/aus, C = Kamera, V = Sensorstrahlen,
@@ -46,7 +46,8 @@ elif args.modell == "best":
     if model_path and model_path.parent == cp:
         print("Noch keine offizielle Bestzeit – zeige den letzten Stand.")
 elif args.modell == "neuester":
-    candidates = [*(run_dir / "snapshots").glob("*.zip"), run_dir / "best_model.zip", *([cp / "model.zip"] if cp else [])]
+    candidates = [*(run_dir / "snapshots").glob("*.zip"), *(run_dir / "versionen").glob("*.zip"),
+                  run_dir / "best_model.zip", *([cp / "model.zip"] if cp else [])]
     candidates = [p for p in candidates if p.exists()]
     model_path = max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 elif args.modell == "letzter":
@@ -135,12 +136,15 @@ def scan_versions():
 
 
 def eval_results():
-    """Ergebnis jeder Auswertung aus summary.csv: {Schritte: Text}."""
+    """Ergebnis jeder Auswertung aus evals.csv: {Schritte: Text}. Läufe von vor Schritt 5: summary.csv."""
     out = {}
+    path = run_dir / "evals.csv"
+    if not path.exists():
+        path = run_dir / "summary.csv"
     try:
-        with open(run_dir / "summary.csv") as f:
+        with open(path) as f:
             for row in csv.DictReader(f):
-                if row["ereignis"] != "auswertung":
+                if row.get("ereignis", "auswertung") != "auswertung":
                     continue
                 if row["gueltig"] == "ja":
                     out[int(row["schritte"])] = f"Auswertung: Ziel in {format_time(float(row['rundenzeit']))}"

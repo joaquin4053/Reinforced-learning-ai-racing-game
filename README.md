@@ -124,9 +124,9 @@ Wichtige Kurven: `auswertung/bestzeit`, `auswertung/gueltig`, `training/anteil_g
 - **Terminal-Fenster schliessen** pausiert ebenfalls sauber (wie Ctrl+C).
 - Bestzeit und Erfolgsstufen stehen sofort in `rekorde.json`. Endet das Training trotzdem einmal ohne Pause
   (Absturz, Strom weg), gehen nur die Schritte seit der letzten Sicherung verloren, Bestzeit und Stufen nicht.
-  `summary.csv` vermerkt das beim Fortsetzen als `absturz`.
+  `ereignisse.csv` vermerkt das beim Fortsetzen als `absturz`.
 - Weitermachen: `.venv/bin/python train.py --name test1 --resume`. Versuchszähler, Schritte, Snapshots, `summary.csv`
-  und TensorBoard laufen nahtlos weiter. Nur die gerade angefangenen Fahrten beginnen neu am Start.
+  und TensorBoard laufen nahtlos weiter (eine Versuchsnummer wird nie doppelt vergeben). Nur die gerade angefangenen Fahrten beginnen neu am Start.
 - Alle 30 min wird automatisch ein Fortsetzungspunkt gespeichert. Bei einem Absturz oder leerem Akku
   sind also höchstens 30 min verloren.
 - Haben sich seit dem Start Physik, Regeln, Sensoren, Strecke oder Reward geändert, verweigert `--resume`
@@ -153,12 +153,30 @@ Wichtige Kurven: `auswertung/bestzeit`, `auswertung/gueltig`, `training/anteil_g
 |---|---|
 | `config.json` | vollständige Konfiguration (SAC, Reward, Physik, Strecke), Seed, alle Versionen, Git-Commit (R9) |
 | `code.tar.gz` | Kopie des Codes, falls er vom Git-Commit abweicht |
-| `summary.csv` | jede Auswertung und jedes Ereignis (Start, Pause, Fortsetzung, Profilwechsel, Stufe) |
-| `best_model.zip` | Modell der offiziellen Bestzeit |
-| `ghosts/` | Fahrt der offiziellen Bestzeit als Geist (`play.py --ghost ...`, `replay.py ...`) |
-| `snapshots/` | Modell alle 250'000 Schritte |
-| `checkpoint/` | Fortsetzungspunkt |
+| `summary.csv` | eine Zeile pro Versuch: Nummer, Art (training/auswertung), Reward, Ergebnis, Rundenzeit, Dauer, aktueller Snapshot |
+| `evals.csv` | jede deterministische Auswertung (R6) mit Rundenzeit und Bestzeit |
+| `ereignisse.csv` | Start, Pause, Fortsetzung, Profilwechsel, erreichte Stufen |
+| `episodes/` | jeder Versuch als komprimierte Datei: Position, Rotation, Beobachtung, Aktion, Reward pro Schritt |
+| `models/` | Snapshot alle 20 Versuche + Meilensteine (10, 20, 50, 100, ... 10'000), nur Actor und Critic |
+| `best_model.zip` | Modell der offiziellen Bestzeit, komplett (zum Weitertrainieren und Gegen-die-KI-Fahren) |
+| `ghosts/` | Fahrt der offiziellen Bestzeit als Geist (`play.py --ghost ...`) |
+| `versionen/` | Modell jeder Auswertung (alle 25'000 Schritte), für die Zeitleiste in `watch.py` |
+| `checkpoint/` | Fortsetzungspunkt (nur hier liegt der Replay-Buffer) |
 | `tb/` | TensorBoard |
+
+Format von `episodes/` und `models/`: siehe `rl/recording.py` (lesen mit `load_episode()` bzw. `load_snapshot()`).
+Einstellungen unter `[aufzeichnung]` in `train_config.toml`. Läufe von vor der Aufzeichnung: Beim ersten
+`--resume` wird die alte `summary.csv` in `evals.csv` und `ereignisse.csv` aufgeteilt (Original: `summary_alt.csv`).
+
+### Speicher und Aufräumen
+```bash
+.venv/bin/python tools/speicher.py                       # belegt pro Lauf, Zuwachs pro 1 Mio. Schritte, Hochrechnung
+.venv/bin/python tools/aufraeumen.py                     # Übersicht
+.venv/bin/python tools/aufraeumen.py test1 --episoden    # nur episodes/ löschen (Snapshots, Bestzeit, summary.csv bleiben)
+.venv/bin/python tools/aufraeumen.py test1 --alles       # ganzen Lauf löschen
+```
+`aufraeumen.py` zeigt vorher, was gelöscht wird, und löscht erst nach Eingabe von `ja`. Läufe, deren Training
+gerade läuft, fasst es nicht an.
 
 **Offizielle Zeiten** (R6) kommen nur aus der **Auswertung**: Alle 25'000 Schritte fährt das aktuelle Modell
 eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur für Stufe 1.
@@ -167,7 +185,7 @@ eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur f
 ```bash
 .venv/bin/python watch.py test1 --live           # LIVE: nach jeder Runde der neueste Stand des Trainings
 .venv/bin/python watch.py test1                  # Modell der offiziellen Bestzeit
-.venv/bin/python watch.py test1 --modell neuester # jüngstes Modell (Snapshot alle 250'000 Schritte)
+.venv/bin/python watch.py test1 --modell neuester # jüngstes Modell (Version alle 25'000 Schritte)
 .venv/bin/python watch.py test1 --modell letzter # letzter Fortsetzungspunkt
 .venv/bin/python watch.py test1 --gegen-mich     # gegen deine Bestzeit als Geist
 ```
