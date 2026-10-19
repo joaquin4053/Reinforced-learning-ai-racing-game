@@ -195,9 +195,33 @@ nach dem Training, liest nur Dateien und läuft mit niedriger Priorität (nice 1
 - **Unten:** Zeitleiste aller Versuche (Höhe = Fortschritt; grün = Ziel, gelb = Ziel in der Auswertung,
   rot = Crash, grau = Zeitlimit). Ziehen = spulen, Klick = zu diesem Versuch. Darunter die aktuelle Fahrt
   (Tempo-Verlauf), darunter die Knöpfe: zurück, Play/Pause, weiter, Tempo (0.5× bis 50×), LIVE, Filter, Kamera, Panel.
+- **Kameras** (C): Verfolger, Drohne (filmisch: schräg von oben, schwenkt langsam ums Auto), von oben, frei.
 - **Rechts:** Panel (P), wird in Schritt 8 und 9 zum Dashboard.
 - **LIVE:** springt zum neuesten Versuch und folgt dem Training. Neue Versuche erscheinen von selbst.
 - Alle Tastenkürzel: `?` (oder H).
+
+**Geister – viele Versuche gleichzeitig** (zweite Knopfreihe oder Tasten G / M / E / T):
+```bash
+.venv/bin/python viewer.py v2_lauf2 --geister 30 --von 100 --bis 300   # 30 Geister aus Versuch 100–300
+.venv/bin/python viewer.py v2_lauf2 --geister 10 --von 500 --bis 1000  # 10 Geister aus Versuch 500–1000
+.venv/bin/python viewer.py v2_lauf2 --geister 10                        # die letzten 10 Versuche, live
+.venv/bin/python viewer.py v2_lauf2 --auswahl meilensteine              # Versuch 10, 20, 50, 100, ... 10'000
+```
+- **Anzahl** 5, 10, 20, 30, 50 oder 100 (G). **Auswahl** (M): *Bereich*, *letzte N* (live) oder *Meilensteine*.
+- **Bereich** von–bis: Die Geister werden gleichmässig darin verteilt (30 aus 100–300 = etwa jeder 7. Versuch).
+  Einstellen: Knopf „Bereich“ oder Taste E und z.B. `100-300` tippen, Enter. Oder mit der **rechten Maustaste**
+  über die Versuchs-Zeitleiste ziehen. Der Bereich ist dort blau markiert. Linksklick auf die Zeitleiste
+  verschiebt ihn (gleiche Breite), B / N springen einen ganzen Bereich zurück / weiter.
+- Alle starten gleichzeitig, halb durchsichtig, ohne Kollision. Farbe nach der aktuellen Position im Rennen:
+  vorderes Drittel grün, mittleres orange, hinteres rot (wechselt mit der Rangliste, auch auf der Minikarte).
+  Über jedem Geist seine Nummer (T blendet sie aus). Wer crasht, bleibt grau an der Crash-Stelle stehen.
+- **Klick auf einen Geist:** Kamera folgt ihm, Info-Zeile und Dashboard zeigen seine Daten.
+- Zeitleiste, Play/Pause und Tempo gelten für alle gemeinsam. Oben links: Rangliste (im Ziel nach Zeit,
+  dann wer noch fährt nach Fortschritt, dann die Gecrashten).
+- Geister sind einfache Modelle (ein Mesh pro Geist). Gemessen mit laufendem Training: 30 Geister 56–60 Bilder/s,
+  50 Geister ca. 56, 100 Geister ca. 40. Die Kamera folgt dem, der am weitesten kommt. Nummern stehen höchstens
+  über den 30 nächsten Geistern.
+  `watch.py` hat keine Geister (jeder bräuchte ein eigenes Netz, das jetzt fährt).
 
 ### Zuschauen, wie das Netz jetzt fährt (`watch.py`)
 Gleiche Oberfläche und gleiche Tasten wie `viewer.py`. Statt eine Aufzeichnung abzuspielen, fährt eine gespeicherte

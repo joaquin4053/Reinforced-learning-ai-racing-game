@@ -66,7 +66,7 @@ class Attempt:
 class EpisodeIndex:
     """Alle Versuche eines Laufs. refresh() liest nur das Neue in summary.csv (das Training hängt Zeilen an)."""
 
-    CACHE = 12
+    CACHE = 220             # Platz für 100 Geister und die Gruppe davor/danach (je Versuch ca. 0.5 MB)
 
     def __init__(self, run_dir):
         self.run_dir = run_dir
@@ -316,23 +316,45 @@ def read_json(path):
         return {}
 
 
+GHOST_COUNTS = (1, 5, 10, 20, 30, 50, 100)  # 1 = keine Geister, nur der gewählte Versuch
+GROUP_MODES = ("bereich", "letzte", "meilensteine")
+GROUP_TEXT = {"bereich": "Bereich", "letzte": "letzte N", "meilensteine": "Meilensteine"}
+MILESTONES = (10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
+DEFAULT_RANGE = 200                        # so breit ist ein neuer Bereich (in Versuchen)
+
+
 class Player:
-    """Zustand der Wiedergabe – die einzige Quelle für 3D-Ansicht, Zeitleisten und Info-Zeile."""
+    """Zustand der Wiedergabe – die einzige Quelle für 3D-Ansicht, Zeitleisten und Info-Zeile.
+
+    Geister (Plan-Schritt 7): Statt eines Versuchs läuft eine Gruppe gleichzeitig, alle mit derselben Zeit t.
+      bereich       n Versuche gleichmässig verteilt von Versuch "von" bis "bis" (z.B. 30 aus 100–300, bis 100 Stück)
+      letzte        die n neuesten Versuche (passt zu LIVE)
+      meilensteine  Versuche 10, 20, 50, ... 10'000        (alle, die es gibt)
+    Einer davon ist im Fokus (current/episode): Ihm folgt die Kamera, Info-Zeile und Dashboard zeigen ihn.
+    Mit Geistern ist das immer der, der am weitesten kommt (im Ziel: der schnellste); ein Klick auf einen
+    anderen Geist gilt, bis sich die Gruppe ändert.
+    Die Gruppe ist zu Ende, wenn der längste Versuch fertig ist.
+    """
 
     END_HOLD = 1.2          # s (echte Zeit): so lange bleibt das Ende einer Fahrt stehen
 
-    def __init__(self, index, mode="alle"):
+    def __init__(self, index, mode="alle", milestones=MILESTONES):
         self.index = index
         self.mode = mode
         self.list = []                  # gefilterte Versuche
-        self.pos = -1                   # Stelle in self.list
+        self.pos = -1                   # Fokus: Stelle in self.list
         self.t = 0.0
         self.playing = True
         self.speed_i = SPEEDS.index(1)
         self.live = True                # folgt dem Training: am Ende immer der neueste Versuch
-        self.episode = None
+        self.episode = None             # Episode des Fokus
         self.hold = None                # Restzeit am Ende einer Fahrt
-        self.changed = True             # neuer Versuch gewählt (Anzeige zurücksetzen)
+        self.changed = True             # Fokus gewechselt (Anzeige zurücksetzen)
+        self.group_changed = True       # andere Geister (Anzeige neu aufbauen)
+        self.n_ghosts, self.group_mode = 1, "letzte"
+        self.range = None               # (von, bis) als Versuchsnummern, für "bereich"
+        self.milestones = tuple(milestones)
+        self.group = []                 # [(Attempt, Episode oder None)], Fokus ist dabei
         self.refresh()
 
     # ---------- Daten ----------
@@ -341,10 +363,13 @@ class Player:
         cur = self.current
         self.list = self.index.filtered(self.mode)
         if cur is not None:
-            self.pos = next((i for i, a in enumerate(self.list) if a.versuch == cur.versuch), self.pos)
+            self.pos = self._find(cur.versuch, self.pos)
         elif self.list:
             self.select(len(self.list) - 1, keep_live=True)
         return new
+
+    def _find(self, versuch, default):
+        return next((i for i, a in enumerate(self.list) if a.versuch == versuch), default)
 
     @property
     def current(self):
@@ -355,34 +380,145 @@ class Player:
         return SPEEDS[self.speed_i]
 
     @property
+    def ghosts_on(self):
+        return self.n_ghosts > 1 or self.group_mode == "meilensteine"
+
+    @property
+    def duration(self):
+        """Länge der ganzen Gruppe (der längste Versuch)."""
+        eps = [ep for _, ep in self.group if ep is not None] or ([self.episode] if self.episode else [])
+        return max((ep.duration for ep in eps), default=0.0)
+
+    @property
     def at_end(self):
-        return self.episode is not None and self.episode.done and self.t >= self.episode.duration
+        if self.episode is None:
+            return False
+        if not self.ghosts_on:
+            return self.episode.done and self.t >= self.episode.duration
+        return self.t >= self.duration
+
+    # ---------- Gruppe ----------
+    def _group_positions(self, pos):
+        last = len(self.list) - 1
+        if not self.ghosts_on:
+            return [pos]
+        if self.group_mode == "meilensteine":
+            want = set(self.milestones)
+            return [i for i, a in enumerate(self.list) if a.versuch in want]
+        if self.group_mode == "letzte":
+            return list(range(max(0, last - self.n_ghosts + 1), last + 1))
+        von, bis = self.range or (self.list[pos].versuch, self.list[pos].versuch + DEFAULT_RANGE)
+        inside = [i for i, a in enumerate(self.list) if von <= a.versuch <= bis]
+        if len(inside) <= self.n_ghosts:
+            return inside
+        picks = np.linspace(0, len(inside) - 1, self.n_ghosts).round().astype(int)   # gleichmässig verteilt
+        return [inside[k] for k in sorted(set(picks.tolist()))]
+
+    @staticmethod
+    def best_key(a):
+        """Wer kommt am weitesten? Im Ziel vor allen anderen (schnellste Zeit zuerst), sonst nach Fortschritt."""
+        return (0, a.rundenzeit) if a.gueltig else (1, -a.fortschritt)
+
+    def _build_group(self, pos, focus=None):
+        """Gruppe aufbauen. Fokus: mit Geistern der, der am weitesten kommt, sonst focus bzw. der neueste."""
+        positions = self._group_positions(pos) or [pos]
+        if self.ghosts_on and len(positions) > 1:
+            focus = min(positions, key=lambda i: self.best_key(self.list[i]))
+        elif focus not in positions:
+            focus = positions[-1]
+        old = {a.versuch: ep for a, ep in self.group}
+        self.group = []
+        for i in positions:
+            a = self.list[i]
+            ep = old[a.versuch] if a.versuch in old else self.index.load(a.versuch)
+            self.group.append((a, ep))
+        self.group_changed = True
+        self._set_focus(focus)
+
+    def _set_focus(self, pos):
+        if pos != self.pos or self.episode is None:
+            self.pos = pos
+            a = self.list[pos]
+            self.episode = next((ep for g, ep in self.group if g.versuch == a.versuch), None) or self.index.load(a.versuch)
+            self.changed = True
+
+    def focus_on(self, versuch):
+        """Klick auf einen Geist: Kamera, Info-Zeile und Dashboard folgen ihm. Die Gruppe bleibt."""
+        i = self._find(versuch, None)
+        if i is not None and any(a.versuch == versuch for a, _ in self.group):
+            self._set_focus(i)
+
+    def set_range(self, von, bis):
+        """Geister aus dem Bereich Versuch von..bis (Reihenfolge egal), gleichmässig verteilt."""
+        von, bis = sorted((int(von), int(bis)))
+        self.range = (von, bis)
+        self.group_mode = "bereich"
+        self.live = False
+        if self.n_ghosts == 1:
+            self.n_ghosts = 10
+        if self.list:
+            self._build_group(max(0, self._find_at_least(von)))
+            self.t, self.hold = 0.0, None
+
+    def _find_at_least(self, versuch):
+        return next((i for i, a in enumerate(self.list) if a.versuch >= versuch), len(self.list) - 1)
+
+    def set_ghosts(self, n=None, mode=None):
+        """Anzahl oder Auswahl ändern; die Gruppe beginnt von vorne."""
+        if n is not None:
+            self.n_ghosts = n
+        if mode is not None:
+            self.group_mode = mode
+            if mode == "letzte":
+                self.live = True
+            elif mode == "bereich":
+                self.live = False
+        if not self.list:
+            return
+        if self.group_mode == "bereich" and self.range is None and self.current is not None:
+            v = self.current.versuch           # neuer Bereich: ab dem gezeigten Versuch
+            self.range = (v, v + DEFAULT_RANGE)
+        pos = len(self.list) - 1 if self.group_mode == "letzte" else max(self.pos, 0)
+        self._build_group(pos, focus=self.pos)
+        self.t, self.hold = 0.0, None
 
     # ---------- Bedienung ----------
     def select(self, pos, t=0.0, keep_live=False):
+        """Einen Versuch wählen (Zeitleiste, B/N). Mit Geistern: der Bereich (gleiche Breite) beginnt dort."""
         if not self.list:
             return
         pos = max(0, min(len(self.list) - 1, pos))
-        if pos != self.pos or self.episode is None:
-            self.pos = pos
-            self.episode = self.index.load(self.list[pos].versuch)
-            self.changed = True
-        self.t, self.hold = t, None
         if not keep_live:
             self.live = False
+        in_group = any(a.versuch == self.list[pos].versuch for a, _ in self.group)
+        if self.ghosts_on and self.group_mode == "meilensteine" and in_group:
+            self._set_focus(pos)                 # Meilenstein angeklickt: nur den Fokus wechseln
+        elif self.ghosts_on and not keep_live:
+            width = self.range[1] - self.range[0] if self.range else DEFAULT_RANGE
+            v = self.list[pos].versuch
+            self.group_mode, self.range = "bereich", (v, v + width)
+            self._build_group(pos, focus=pos)
+        else:
+            self._build_group(pos)
+        self.t, self.hold = t, None
 
     def select_versuch(self, versuch):
-        for i, a in enumerate(self.list):
-            if a.versuch >= versuch:
-                return self.select(i)
-        self.select(len(self.list) - 1)
+        self.select(self._find_at_least(versuch))
 
     def step_attempt(self, delta):
-        self.select(self.pos + delta)
+        """Ein Versuch zurück/weiter; mit Geistern im Bereich: der ganze Bereich (gleiche Breite)."""
+        if self.ghosts_on and self.group_mode == "bereich" and self.range:
+            von, bis = self.range
+            width = bis - von + 1
+            self.set_range(max(1, von + delta * width), max(1, von + delta * width) + width - 1)
+        else:
+            self.select(self.pos + delta)
 
     def go_live(self):
         self.live = True
         self.playing = True
+        if self.ghosts_on and self.group_mode != "meilensteine":
+            self.group_mode = "letzte"
         self.select(len(self.list) - 1, keep_live=True)
 
     def restart(self):
@@ -399,7 +535,7 @@ class Player:
     def seek(self, t):
         if self.episode:
             self.episode.extend(t)                   # LiveEpisode: bis dorthin vorausfahren
-            self.t = max(0.0, min(self.episode.duration, t))
+            self.t = max(0.0, min(self.duration, t))
             self.hold = None
 
     def faster(self, delta):
@@ -409,10 +545,15 @@ class Player:
         cur = self.current
         self.mode = mode
         self.list = self.index.filtered(mode)
+        self.group = []
         if not self.list:
             self.pos, self.episode = -1, None
+            self.group_changed = True
             return
-        if self.live or cur is None:
+        if self.ghosts_on and self.group_mode == "bereich" and self.range:
+            self.pos = -1
+            self.set_range(*self.range)          # gleicher Bereich, nur noch passende Versuche
+        elif self.live or cur is None:
             self.select(len(self.list) - 1, keep_live=self.live)
         else:            # nächster passender Versuch ab dem aktuellen
             self.pos = -1
@@ -422,15 +563,16 @@ class Player:
     def update(self, dt):
         if not self.playing or self.current is None:
             return
-        if self.episode is None:                      # Datei fehlt -> kurz zeigen, dann weiter
+        if self.episode is None and not self.ghosts_on:   # Datei fehlt -> kurz zeigen, dann weiter
             self.hold = self.END_HOLD if self.hold is None else self.hold - dt
             if self.hold <= 0:
                 self._next()
             return
         if not self.at_end:
             target = self.t + dt * self.speed
-            self.episode.extend(target)
-            self.t = min(self.episode.duration, target)
+            if self.episode is not None:
+                self.episode.extend(target)
+            self.t = min(self.duration, target)
             return
         self.hold = self._end_hold() if self.hold is None else self.hold - dt
         if self.hold <= 0:
@@ -440,14 +582,20 @@ class Player:
         return self.END_HOLD if self.speed <= 2 else 0.4
 
     def _next(self):
+        """Ende der Fahrt bzw. der Gruppe: live -> die neuesten; ein Versuch -> der nächste;
+        Bereich oder Meilensteine -> anhalten (mit N geht es zum nächsten Bereich)."""
         self.hold = None
+        last = len(self.list) - 1
         if self.live:
-            if self.pos < len(self.list) - 1:
-                self.select(len(self.list) - 1, keep_live=True)
+            newest_in_group = any(a.versuch == self.list[last].versuch for a, _ in self.group)
+            if not newest_in_group or (not self.ghosts_on and self.pos < last):
+                self.select(last, keep_live=True)
             else:
-                self.t = self.episode.duration if self.episode else 0.0   # warten auf den nächsten Versuch
+                self.t = self.duration                 # warten auf den nächsten Versuch
                 self.hold = 0.25
-        elif self.pos < len(self.list) - 1:
+        elif self.ghosts_on:
+            self.playing = False
+        elif self.pos < last:
             self.select(self.pos + 1)
         else:
             self.playing = False                       # letzter Versuch, nicht live -> anhalten

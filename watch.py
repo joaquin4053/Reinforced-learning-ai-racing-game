@@ -79,6 +79,7 @@ class ModelSource(Source):
     title = "KI fährt"
     live_text = "neueste Version, folgt dem Training"
     filter_text = {"alle": "Alle Versionen", "gueltige": "Nur Versionen im Ziel"}
+    ghosts_enabled = False              # jeder Geist bräuchte ein eigenes Netz, das jetzt fährt
 
     @staticmethod
     def name(a):
@@ -105,7 +106,7 @@ class ModelSource(Source):
             return text
         return f"{(info.get('ende') or '').upper()}\n{info.get('fortschritt_prozent', 0):.0f} % geschafft"
 
-    def panel(self, index, player):
+    def panel(self, index, player, extra=()):
         ok = sum(a.gueltig for a in index.attempts)
         live = read_json(self.run_dir / "live.json")
         steps = max([live.get("schritte") or 0] + [a.schritte for a in index.attempts[-1:]])

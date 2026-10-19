@@ -1,4 +1,5 @@
 """Kameras (Spiel v2, 3D): Verfolger, Cockpit, Vogel. Taste C wechselt.
+Zuschauen (viewer.py / watch.py) hat zusätzlich die Drohne ("cine") und eine freie Kamera.
 
 Verfolger (Notizen: docs/beobachtung_polytrack.md):
 - hinter dem Auto, leicht erhöht, folgt weich auch in der Höhe,
@@ -13,6 +14,13 @@ MODES = ("chase", "cockpit", "top")
 MOVE_BLEND = 0.55      # 0 = Kamera schaut wie die Nase, 1 = wie die Fahrtrichtung
 ROLL_FOLLOW = 0.7      # so viel der Querneigung macht die Kamera mit
 SHAKE = 0.05           # m Vibrieren der Kamera bei Spitzentempo (nur Anzeige)
+
+# Drohne: schräg von hinten oben, schwenkt langsam um das Auto (filmisch, nur zum Zuschauen)
+CINE_DIST, CINE_HEIGHT = 15.0, 9.0         # m (wächst etwas mit dem Tempo)
+CINE_SIDE = math.radians(40)               # Grundwinkel seitlich von hinten
+CINE_SWING = math.radians(38)              # so weit schwenkt sie hin und her ...
+CINE_PERIOD = 26.0                         # ... in so vielen Sekunden einmal
+CINE_FOV = 42                              # enger Bildwinkel = Teleobjektiv, wirkt ruhiger
 
 
 def _smooth(dt, speed):
@@ -31,6 +39,7 @@ class CameraRig:
         self.pos = Vec3(0, 0, 0)
         self.look = Vec3(0, 0, 0)
         self.yaw = 0.0
+        self.cine_yaw = 0.0        # Drohne: dreht viel langsamer mit als der Verfolger
         self.roll = 0.0
         self.t = 0.0
 
@@ -44,7 +53,7 @@ class CameraRig:
         if move_heading is not None and speed > 8:
             target_yaw = _angle_lerp(heading, move_heading, MOVE_BLEND)
         if self.first:
-            self.yaw, self.roll = target_yaw, roll
+            self.yaw, self.cine_yaw, self.roll = target_yaw, target_yaw, roll
         self.yaw = _angle_lerp(self.yaw, target_yaw, _smooth(dt, 6.0))
         fx, fz = math.sin(self.yaw), math.cos(self.yaw)
         tilt = 0.0
@@ -61,6 +70,16 @@ class CameraRig:
             want_look = car + Vec3(hx * 20, 1.0, hz * 20)
             stiff, fov = 40.0, 85
             tilt = roll
+        elif self.mode == "cine":
+            v = min(max(speed, 0), 110)
+            swing = CINE_SIDE + CINE_SWING * math.sin(2 * math.pi * self.t / CINE_PERIOD)
+            self.cine_yaw = _angle_lerp(self.cine_yaw, target_yaw, _smooth(dt, 0.9))
+            a = self.cine_yaw + math.pi + swing                     # hinten, seitlich versetzt
+            dist, height = CINE_DIST + v * 0.08, CINE_HEIGHT + v * 0.05
+            want_pos = car + Vec3(math.sin(a) * dist, height, math.cos(a) * dist)
+            ahead = 18 + v * 0.25                                   # weit nach vorne: Strecke und Horizont im Bild
+            want_look = car + Vec3(fx * ahead, -1.5, fz * ahead)
+            stiff, fov = 1.6, CINE_FOV                              # weich, schwebt hinterher
         else:
             want_pos = car + Vec3(-fx * 4, 80, -fz * 4)
             want_look = car + Vec3(fx * 6, 0, fz * 6)

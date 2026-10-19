@@ -85,6 +85,7 @@ class Minimap:
         add(self.map, _bar(track.start_gate, track.width * WIDEN), FINISH, 4)
         if not track.is_loop:
             add(self.map, _bar(track.finish_gate, track.width * WIDEN), FINISH, 4)
+        self._add = add
         self.ghost_dots = [add(self.map, _shape([(0, 10), (-10, 0), (0, -10), (10, 0)]), gc, 5)
                            for gc in ghost_colors]
         # Auto: Pfeil, zeigt immer nach oben (die Karte dreht sich drumherum)
@@ -104,9 +105,19 @@ class Minimap:
         right = self._aspect / 2 if self.right is None else self.right
         self.frame.position = Vec3(right - MARGIN - SIZE / 2, self.top - MARGIN - SIZE / 2, 0)
 
+    def set_ghost_colors(self, colors):
+        """Farben der Geist-Punkte (viewer.py: Gruppe hat sich geändert). Fehlende Punkte werden angelegt."""
+        while len(self.ghost_dots) < len(colors):
+            self.ghost_dots.append(self._add(self.map, _shape([(0, 7), (-7, 0), (0, -7), (7, 0)]), colors[0], 5))
+        for dot, col in zip(self.ghost_dots, colors):
+            dot.color = col
+
     def update(self, x, z, heading, ghost_positions=()):
         self._place()
         self.map.position = Vec3(-x * self.k, -z * self.k, 0)
         self.pivot.rotation_z = -math.degrees(heading)  # Karte so drehen, dass die Fahrtrichtung oben ist
+        for dot in self.ghost_dots[len(ghost_positions):]:
+            dot.enabled = False
         for dot, (gx, gz) in zip(self.ghost_dots, ghost_positions):
+            dot.enabled = True
             dot.position = Vec3(gx, gz, 0)

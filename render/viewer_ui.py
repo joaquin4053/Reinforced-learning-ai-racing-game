@@ -113,6 +113,8 @@ class Strip:
         self.bg = _quad(self.root, STRIP_BG, z=0.02)
         self.image = _quad(self.root, color.white, z=0.01)
         self.played = _quad(self.root, color.rgba(1, 1, 1, 0.10), z=0.005)
+        self.band = _quad(self.root, color.rgba(0.35, 0.75, 1.0, 0.28), z=0.004)   # gewählter Bereich (Geister)
+        self.band.enabled = False
         self.knob = _quad(self.root, color.white, z=-0.01)
         self.hover_line = _quad(self.root, color.rgba(1, 1, 1, 0.5), z=-0.005)
         self.title = TextQuad(title, parent=self.root, height=0.019, origin=(-.5, 0), px=40, color=GREY)
@@ -128,6 +130,14 @@ class Strip:
         self.title.position = Vec3(x_label, (y0 + y1) / 2, 0)
         self.right.position = Vec3(x_right, (y0 + y1) / 2, 0)
         self.set_frac(self.frac)
+
+    def set_band(self, f0=None, f1=None):
+        """Bereich f0..f1 (0..1) farbig markieren, None = keiner."""
+        self.band.enabled = f0 is not None
+        if f0 is not None:
+            x0, y0, x1, y1 = self.rect
+            a, b = sorted((max(0.0, min(1.0, f0)), max(0.0, min(1.0, f1))))
+            _place(self.band, x0 + (x1 - x0) * a, y0 - 0.006, x0 + (x1 - x0) * max(b, a + 0.002), y1 + 0.006)
 
     def set_image(self, img):
         self.image.texture = _texture(img, nearest=True)
@@ -288,3 +298,88 @@ class Help:
     @property
     def visible(self):
         return self.root.enabled
+
+
+class Ranking:
+    """Kleine Rangliste der Geister oben links in der 3D-Ansicht (Plan-Schritt 7)."""
+    ROWS, ROW = 8, 0.026
+
+    def __init__(self):
+        self.root = Entity(parent=camera.ui, z=-0.3)        # vor den Nummern der Geister
+        self.bg = _quad(self.root, color.rgba(0.05, 0.07, 0.16, 0.85), z=0.01)
+        self.title = TextQuad("Rangliste", parent=self.root, height=0.02, origin=(-.5, .5), heavy=True,
+                              color=YELLOW, px=40)
+        self.rows = [TextQuad("", parent=self.root, height=0.019, origin=(-.5, .5), px=40, heavy=True)
+                     for _ in range(self.ROWS)]
+        self.root.enabled = False
+
+    def layout(self, x0, y1):
+        self.x0, self.y1 = x0, y1
+        self.title.position = Vec3(x0 + 0.012, y1 - 0.01, 0)
+        for i, r in enumerate(self.rows):
+            r.position = Vec3(x0 + 0.012, y1 - 0.042 - i * self.ROW, 0)
+
+    def set(self, rows):
+        """rows = [(Text, rgb)], höchstens ROWS. Leer = ausblenden."""
+        self.root.enabled = bool(rows)
+        if not rows:
+            return
+        for r, (text, rgb) in zip(self.rows, rows):
+            r.set(text, rgb)
+        for r in self.rows[len(rows):]:
+            r.text = ""
+        h = 0.05 + len(rows) * self.ROW
+        _place(self.bg, self.x0, self.y1 - h, self.x0 + 0.3, self.y1)
+
+
+class InputBox:
+    """Kleines Eingabefeld (Ursinas eigenes Textfeld geht im macOS-Core-Profil nicht)."""
+
+    def __init__(self, title, hint):
+        self.root = Entity(parent=camera.ui, z=-0.6)
+        self.bg = _quad(self.root, color.rgba(0.03, 0.04, 0.1, 0.96), z=0.01)
+        self.field = _quad(self.root, color.rgba(0.16, 0.19, 0.34, 1), z=0.005)
+        self.title = TextQuad(title, parent=self.root, height=0.028, origin=(0, 0), heavy=True, color=YELLOW)
+        self.text = TextQuad("", parent=self.root, height=0.036, origin=(0, 0), heavy=True)
+        self.hint = TextQuad(hint, parent=self.root, height=0.018, origin=(0, 0), px=40, color=GREY)
+        self.error = TextQuad("", parent=self.root, height=0.018, origin=(0, 0), px=40, color=(255, 120, 100))
+        self.value = ""
+        self.root.enabled = False
+
+    def layout(self, cx, cy):
+        w, h = 0.62, 0.2
+        _place(self.bg, cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        _place(self.field, cx - 0.2, cy - 0.028, cx + 0.2, cy + 0.028)
+        self.title.position = Vec3(cx, cy + 0.065, 0)
+        self.text.position = Vec3(cx, cy, 0)
+        self.hint.position = Vec3(cx, cy - 0.055, 0)
+        self.error.position = Vec3(cx, cy - 0.08, 0)
+
+    def open(self, value=""):
+        self.value = value
+        self.error.text = ""
+        self.root.enabled = True
+        self._show()
+
+    def close(self):
+        self.root.enabled = False
+
+    @property
+    def active(self):
+        return self.root.enabled
+
+    def type(self, ch):
+        if len(self.value) < 20:
+            self.value += ch
+            self.error.text = ""
+            self._show()
+
+    def backspace(self):
+        self.value = self.value[:-1]
+        self._show()
+
+    def fail(self, text):
+        self.error.text = text
+
+    def _show(self):
+        self.text.text = self.value + "|"
