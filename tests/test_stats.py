@@ -99,3 +99,13 @@ def test_numpy_critic_and_contributions_match_model(tmp_path):
     assert c1.shape == (64, 24) and c2.shape == (64, 64) and c3.shape == (4, 64)
     np.testing.assert_allclose(c1.sum(axis=1) + actor.b1, actor.w1 @ obs[3] + actor.b1)   # Summe der Beiträge = Eingang
     assert len(INPUT_NAMES) == 24 and INPUT_NAMES[8] == "Sensor vorne" and INPUT_NAMES[0] == "Sensor 90° L"
+
+
+def test_reward_parts_v2_time_bonus():
+    w2 = {"k_fortschritt": 1.0, "k_zeit": 0.1, "k_crash": 50.0, "k_ziel_pro_sekunde": 20.0, "zeitlimit": 180.0}
+    n = 60 * 50                                         # Runde in 50 s
+    r = np.full(n, 0.9)
+    r[-1] += 20 * (180 - 50)
+    parts = reward_parts(r, w2, "Ziel")
+    assert parts["ziel"][-1] == pytest.approx(2600)
+    np.testing.assert_allclose(parts["fortschritt"], 1.0, atol=1e-9)

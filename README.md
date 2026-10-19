@@ -92,7 +92,9 @@ Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zä
 - **Gym-Umgebung:** `rl/env.py` (`RaceEnv`) mit `reset()` und `step(action)` nach Gymnasium-Standard.
   Aktion `[Lenkung, Gas, Bremse, Drift]`, Beobachtung siehe Tabelle in [CLAUDE.md](CLAUDE.md).
 - **Reward** genau nach Regel R7, Gewichte in `reward_config.toml`. Beispiel mit echten Zahlen:
-  `.venv/bin/python tools/reward_example.py`
+  `.venv/bin/python tools/reward_example.py`. Seit Reward v2 (2026-10-19) hängt der Ziel-Bonus von der
+  Rundenzeit ab: 20 Punkte pro Sekunde unter dem Zeitlimit (51 s -> 2'580). Dazu `gamma = 0.999` in
+  `train_config.toml`: Die KI schaut ~17 s voraus statt 3 s und sieht so, dass eine schnellere Runde mehr bringt.
 - **Regel-Fahrer** `rl/rule_driver.py`: fährt nur mit den Sensoren der KI eine gültige Runde (Vergleichswert).
 - `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5), Code in `game/sensors.py`.
 
@@ -104,7 +106,11 @@ Einstellungen in `train_config.toml`.
 ```bash
 .venv/bin/python -m pip install -r requirements.txt     # einmalig (torch, stable-baselines3, tensorboard, psutil)
 .venv/bin/python train.py --name test1                  # neues Training, läuft bis Ctrl+C
+.venv/bin/python train.py --name lauf3 --start-netz runs/v2_lauf2/best_model.zip   # neu, aber mit diesem Netz
 ```
+`--start-netz`: neues Training (eigene Zähler, leerer Replay-Buffer, aktuelle Versionen), das mit den Gewichten
+eines vorhandenen Modells beginnt statt mit einem Zufallsnetz. Geht nur, wenn Sensoren und Aktionen gleich sind
+(R8); woher das Netz kommt, steht in `config.json` (R9).
 Der Mac bleibt automatisch wach, solange das Training läuft (`train.py` startet dafür `caffeinate -i`).
 **Deckel offen lassen**: Zugeklappt schläft ein MacBook trotzdem ein. Für eine Nacht am besten ans Netzteil.
 

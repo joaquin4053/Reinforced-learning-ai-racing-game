@@ -12,7 +12,8 @@ from rl.env import RaceEnv  # noqa: E402
 from rl.rule_driver import rule_action  # noqa: E402
 
 env = RaceEnv()
-print(f"Gewichte: k_fortschritt={env.k_progress}, k_zeit={env.k_time}, k_crash={env.k_crash}, k_ziel={env.k_finish}\n")
+print(f"Gewichte: k_fortschritt={env.k_progress}, k_zeit={env.k_time}, k_crash={env.k_crash}, "
+      f"Ziel-Bonus={'fest ' + str(env.k_finish) if env.k_finish_per_s is None else str(env.k_finish_per_s) + ' pro s unter dem Zeitlimit'}\n")
 print(f"{'Schritt':>7} {'Zeit':>6} {'Tempo':>9} {'Höchststand':>12} {'+Fortschr.':>10} {'Zeit':>6} "
       f"{'Crash':>6} {'Ziel':>6} {'= Reward':>9} {'Summe':>8}")
 

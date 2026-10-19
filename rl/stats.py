@@ -34,7 +34,11 @@ def reward_parts(rewards, weights, result):
         if result == "Crash":
             crash[-1] = -float(weights["k_crash"])
         elif result == "Ziel":
-            ziel[-1] = float(weights["k_ziel"])
+            if "k_ziel_pro_sekunde" in weights:                 # Reward v2: nach Rundenzeit (R7)
+                limit = float(weights.get("zeitlimit", 180.0))
+                ziel[-1] = float(weights["k_ziel_pro_sekunde"]) * max(0.0, limit - n / 60.0)
+            else:
+                ziel[-1] = float(weights["k_ziel"])
     return {"fortschritt": r - zeit - crash - ziel, "zeit": zeit, "crash": crash, "ziel": ziel, "summe": r}
 
 

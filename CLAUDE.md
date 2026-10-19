@@ -20,7 +20,8 @@ R5 Nur Fahrersicht: Die KI bekommt nur Informationen, die ein Fahrer im Auto wah
 
 R6 Zeitmessung: Zeit = Anzahl Physik-Schritte × Zeitschritt, angezeigt auf 0.01 s. Nie mit der echten Uhr messen. Offizielle Bestzeiten der KI zählen nur aus deterministischen Fahrten (ohne Zufall).
 
-R7 Belohnung dient nur dem Ziel: Der Reward besteht nur aus: Fortschritt entlang der Strecke (nur ein neuer Höchststand zählt), einer kleinen Zeitstrafe pro Schritt, einer Crash-Strafe und einem Ziel-Bonus. Keine Belohnung für Tempo an sich, für Hin-und-her-Fahren oder Rückwärtsfahren. Steigt der Reward, ohne dass Runden gültiger oder schneller werden, ist das ein Fehler oder eine Lücke: Training stoppen und melden.
+R7 Belohnung dient nur dem Ziel: Der Reward besteht nur aus: Fortschritt entlang der Strecke (nur ein neuer Höchststand zählt), einer kleinen Zeitstrafe pro Schritt, einer Crash-Strafe und einem Ziel-Bonus. Der Ziel-Bonus hängt von der Rundenzeit ab: je schneller die gültige Runde, desto grösser (fester Betrag pro Sekunde unter dem Zeitlimit aus R11). Keine Belohnung für Tempo an sich, für Hin-und-her-Fahren oder Rückwärtsfahren. Steigt der Reward, ohne dass Runden gültiger oder schneller werden, ist das ein Fehler oder eine Lücke: Training stoppen und melden.
+*(Geändert am 2026-10-19 mit Zustimmung: Ziel-Bonus vorher fest, jetzt nach Rundenzeit. Reward-Version 2.)*
 
 R8 Versionen: Jede Änderung an Physik, Strecke, Regeln, Sensoren oder Reward erhöht die passende Versionsnummer. Replays, Bestzeiten und Modelle speichern diese Versionen. Ergebnisse verschiedener Versionen werden nie direkt verglichen.
 

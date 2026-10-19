@@ -85,6 +85,19 @@ def evaluate(model, reward_cfg, record=True):
     return info, env.sim
 
 
+def load_start_net(model, path):
+    """Gewichte (Actor, Critic, Ziel-Netze, Optimierer) und Entropie-Wert eines vorhandenen Modells übernehmen.
+    Der Replay-Buffer startet leer, die Zähler bei 0 – es ist ein neues Training, nur nicht mit Zufallsnetz."""
+    from stable_baselines3.common.save_util import load_from_zip_file
+    data, params, variables = load_from_zip_file(path, device="cpu")
+    if data["observation_space"].shape != model.observation_space.shape or \
+            data["action_space"].shape != model.action_space.shape:
+        raise ValueError("Start-Netz passt nicht: andere Beobachtung oder andere Aktionen (R8).")
+    model.set_parameters(params, exact_match=False, device="cpu")
+    if variables and "log_ent_coef" in variables and getattr(model, "log_ent_coef", None) is not None:
+        model.log_ent_coef.data.copy_(variables["log_ent_coef"])
+
+
 class _Hook(BaseCallback):
     def __init__(self, trainer):
         super().__init__()
@@ -116,7 +129,8 @@ class Trainer:
         self.snapshot_every, self.milestones = rec["snapshot_alle_versuche"], set(rec["meilensteine"])
 
     # ---------- Aufbau ----------
-    def new(self, seed):
+    def new(self, seed, start_net=None):
+        """Neues Training. start_net = Pfad zu einem Modell (.zip), dessen Netz übernommen wird (train.py --start-netz)."""
         s = self.cfg["sac"]
         apply_priority(self.profile)
         self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
@@ -124,6 +138,8 @@ class Trainer:
                          batch_size=s["batch"], gamma=s["gamma"], tau=s["tau"], learning_starts=s["lernstart"],
                          policy_kwargs={"net_arch": list(s["netz"])}, tensorboard_log=str(self.run.tb_dir),
                          seed=seed, device="cpu", verbose=0)
+        if start_net:
+            load_start_net(self.model, start_net)
         self._set_schedule()
         self.state = {"versuche": 0, "laufzeit_s": 0.0, "auswertungen": 0, "serie": 0, "bestzeit": None,
                       "bestzeit_schritte": None, "bestzeit_versuch": None, "bestzeit_verlauf": [], "stufen": {},

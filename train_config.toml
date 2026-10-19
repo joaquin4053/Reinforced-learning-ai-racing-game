@@ -10,7 +10,7 @@
 lernrate = 0.0003
 puffer = 300_000              # Replay-Buffer: so viele Schritte merkt sich die KI (ca. 60 MB Arbeitsspeicher)
 batch = 256                   # Schritte pro Lern-Update
-gamma = 0.995                 # wie weit die KI vorausdenkt: ca. 1/(1-gamma) = 200 Schritte = 3.3 s
+gamma = 0.999                 # wie weit die KI vorausdenkt: ca. 1/(1-gamma) = 1000 Schritte = 17 s (vorher 0.995 = 3.3 s)
 tau = 0.005                   # wie schnell die Ziel-Netze nachgeführt werden
 lernstart = 10_000            # so viele Schritte zufällig fahren, bevor das Lernen beginnt
 updates_pro_schritt = 0.25    # Lern-Updates pro gesammeltem Schritt, unabhängig vom Profil

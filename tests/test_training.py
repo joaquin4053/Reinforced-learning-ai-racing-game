@@ -196,3 +196,41 @@ def test_train_config_is_valid():
     for key in ("sac", "ablauf", "aufzeichnung", "erfolg", "ressourcen", "profile"):
         assert key in cfg
     assert {"episoden", "snapshot_alle_versuche", "meilensteine"} <= set(cfg["aufzeichnung"])
+
+
+def test_start_from_existing_net(tmp_path, monkeypatch):
+    """--start-netz: neues Training (Zähler bei 0, Buffer leer), aber mit den Gewichten des alten Modells."""
+    import torch
+    from rl.trainer import load_start_net
+    monkeypatch.setattr("rl.run.RUNS_DIR", tmp_path)
+    reward = load_reward_config()
+    old = Run("alt")
+    old.create(SMALL)
+    t1 = Trainer(old, SMALL, reward, RES, _profiles(1), "sparsam", stop_steps=300)
+    t1.new(seed=0)
+    t1.train({})
+    t1.model.save(tmp_path / "alt.zip")
+    new = Run("neu")
+    new.create(SMALL)
+    t2 = Trainer(new, SMALL, reward, RES, _profiles(1), "sparsam")
+    t2.new(seed=5, start_net=tmp_path / "alt.zip")
+    assert t2.steps == 0 and t2.model.replay_buffer.size() == 0
+    for a, b in zip(t1.model.policy.parameters(), t2.model.policy.parameters()):
+        assert torch.equal(a, b)
+    assert torch.equal(t1.model.log_ent_coef, t2.model.log_ent_coef)
+    with pytest.raises(ValueError):                 # andere Aktionen (ohne Drift) -> passt nicht (R8)
+        from stable_baselines3 import SAC
+        from rl.env import RaceEnv
+        cfg = {**reward, "umgebung": {**reward["umgebung"], "drift_erlaubt": False}}
+        load_start_net(SAC("MlpPolicy", RaceEnv(config=cfg), device="cpu"), tmp_path / "alt.zip")
+
+
+def test_finish_bonus_depends_on_lap_time():
+    """Reward v2 (R7 geändert am 2026-10-19): Ziel-Bonus = 20 pro Sekunde unter dem Zeitlimit."""
+    from rl.env import RaceEnv
+    env = RaceEnv()
+    assert env.finish_bonus(51.0) == pytest.approx(20 * (180 - 51))
+    assert env.finish_bonus(48.0) - env.finish_bonus(55.0) == pytest.approx(140)
+    assert env.finish_bonus(200.0) == 0.0
+    old = {**load_reward_config(), "gewichte": {"k_fortschritt": 1.0, "k_zeit": 0.1, "k_crash": 50.0, "k_ziel": 100.0}}
+    assert RaceEnv(config=old).finish_bonus(51.0) == 100.0      # alte Läufe (Reward v1) unverändert

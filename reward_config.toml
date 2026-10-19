@@ -3,7 +3,8 @@
 #   Reward pro Schritt = k_fortschritt × (neuer Höchststand des Fortschritts − bisheriger Höchststand, in m)
 #                        − k_zeit
 #                        − k_crash   (nur im Schritt, in dem ein Crash passiert, R11)
-#                        + k_ziel    (nur im Schritt, in dem eine gültige Runde fertig ist, R1)
+#                        + k_ziel_pro_sekunde × (Zeitlimit − Rundenzeit)
+#                                    (nur im Schritt, in dem eine gültige Runde fertig ist, R1; Zeitlimit aus R11)
 #
 # Zurückfahren und erneut Vorfahren bringt nichts (nur ein neuer Höchststand zählt).
 # Keine Belohnung für Tempo an sich, keine eigene Strafe für Wandberührungen (kostet aber Zeit).
@@ -11,10 +12,10 @@
 # WICHTIG: Gewichte ändern -> reward erhöhen (Regel R8). Bestandteile ändern nur mit Zustimmung (Regel R10).
 
 [version]
-reward = 1
+reward = 2      # 1: Ziel-Bonus fest 100; 2: Ziel-Bonus nach Rundenzeit (R7 geändert am 2026-10-19)
 
 [gewichte]
-# 1 Punkt pro Meter neuer Strecke. Eine Fahrt über Strecke 1 (966 m) bringt so ca. 966 Punkte, pro Schritt bei
+# 1 Punkt pro Meter neuer Strecke. Eine Fahrt über poly01 (2'941 m) bringt so ca. 2'941 Punkte, pro Schritt bei
 # Vollgas knapp 1 Punkt – eine gut handhabbare Größenordnung für das Lernverfahren (SAC).
 k_fortschritt = 1.0
 
@@ -28,9 +29,11 @@ k_zeit = 0.1
 # damit die KI sich traut, schneller zu fahren.
 k_crash = 50.0
 
-# Einmalig bei gültiger Runde. Macht das Ankommen deutlich besser als "fast angekommen" und hilft,
-# Stufe 1 (erste gültige Runde) zu erreichen.
-k_ziel = 100.0
+# Einmalig bei gültiger Runde, umso mehr, je schneller: 20 Punkte pro Sekunde unter dem Zeitlimit (180 s).
+# Beispiel: 55 s -> 2'500, 51 s -> 2'580, 48 s -> 2'640. Jede Sekunde schneller = +20.
+# Zusammen mit gamma 0.999 (train_config.toml) sieht die KI diesen Bonus schon etwa 17 s vor dem Ziel.
+# Ein Crash kostet damit nicht nur k_crash, sondern auch den ganzen Bonus -> Ankommen bleibt das Wichtigste.
+k_ziel_pro_sekunde = 20.0
 
 [umgebung]
 strecke = "tracks/poly01.json"

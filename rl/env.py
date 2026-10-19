@@ -42,7 +42,9 @@ class RaceEnv(gym.Env):
         self.config = config or load_reward_config()
         w = self.config["gewichte"]
         self.k_progress, self.k_time = w["k_fortschritt"], w["k_zeit"]
-        self.k_crash, self.k_finish = w["k_crash"], w["k_ziel"]
+        self.k_crash = w["k_crash"]
+        self.k_finish = w.get("k_ziel")                       # Reward v1: fester Ziel-Bonus
+        self.k_finish_per_s = w.get("k_ziel_pro_sekunde")     # Reward v2: Bonus nach Rundenzeit (R7)
         env_cfg = self.config["umgebung"]
         self.track = Track.load(ROOT / (track_file or env_cfg["strecke"]))
         self.sim = Sim(self.track, record=record)
@@ -80,7 +82,7 @@ class RaceEnv(gym.Env):
             "fortschritt": self.k_progress * (new_best - self.best_progress),   # nur neuer Höchststand
             "zeit": -self.k_time,
             "crash": -self.k_crash if self.sim.result == "crashed" else 0.0,
-            "ziel": self.k_finish if self.sim.result == "finished" else 0.0,
+            "ziel": self.finish_bonus() if self.sim.result == "finished" else 0.0,
         }
         self.best_progress = new_best
         reward = float(sum(parts.values()))
@@ -95,6 +97,13 @@ class RaceEnv(gym.Env):
             if terminated or truncated:
                 info["aufzeichnung"] = self.recorder.finish()
         return obs, reward, terminated, truncated, info
+
+    def finish_bonus(self, lap_time=None):
+        """Ziel-Bonus (R7): v2 = k_ziel_pro_sekunde x (Zeitlimit - Rundenzeit), v1 = fest k_ziel."""
+        if self.k_finish_per_s is None:
+            return float(self.k_finish)
+        t = self.sim.finish_time if lap_time is None else lap_time
+        return float(self.k_finish_per_s) * max(0.0, self.sim.rules.time_limit - t)
 
     # ---------- Zusatzinfos ----------
     def _info(self):

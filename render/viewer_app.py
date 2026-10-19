@@ -426,7 +426,8 @@ class ViewerApp:
         self.dash_static = {
             "attempts": att, "records": read_json(src.run_dir / "rekorde.json"), "mine": src.mine,
             "mine_time": src.mine["time"] if src.mine else None,
-            "weights": src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
+            "weights": {**src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
+                        "zeitlimit": src.cfg.get("spiel_config", {}).get("regeln", {}).get("time_limit", 180.0)},
             "train_s": training_seconds(src.run_dir), "jump": lambda v: src.jump(p, v),
             "get_nets": lambda: src.nets(p), "get_prev": lambda: src.prev_actor(p), "track": src.track,
         }

@@ -4,11 +4,13 @@
     .venv/bin/python train.py --name test1 --resume             # genau dort weitermachen
     .venv/bin/python train.py --name test1 --resume --profil sparsam
     .venv/bin/python train.py --name test1 --minuten 30         # nach 30 min selbst pausieren
+    .venv/bin/python train.py --name lauf3 --start-netz runs/v2_lauf2/best_model.zip   # neues Training, altes Netz
 
 Ctrl+C pausiert sauber: Fortsetzungspunkt (Modell, Replay-Buffer, Zähler) wird gespeichert.
 Alles landet in runs/<name>/ (siehe rl/run.py). Einstellungen: train_config.toml.
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -52,7 +54,27 @@ def new_config(args, train_cfg, reward_cfg):
         "reward_config": reward_cfg,
         "spiel_config": GAME_CONFIG,
         "strecke": json.loads(track_file.read_text()),
+        "start_netz": start_net_info(args.start_netz, versions) if args.start_netz else None,
     }
+
+
+def start_net_info(path, versions):
+    """Woher das Start-Netz kommt (R9). Bricht ab, wenn Sensoren oder Aktionen nicht passen (R8)."""
+    p = Path(path)
+    if not p.exists():
+        sys.exit(f"Start-Netz nicht gefunden: {path}")
+    run_cfg = next((d / "config.json" for d in p.resolve().parents if (d / "config.json").exists()), None)
+    info = {"pfad": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+    if run_cfg:
+        src = json.loads(run_cfg.read_text())
+        info.update(lauf=src.get("name"), versionen=src.get("versionen"))
+        old = src.get("versionen", {})
+        if old.get("sensoren") != versions["sensoren"]:
+            sys.exit(f"Start-Netz passt nicht: Sensoren v{old.get('sensoren')} statt v{versions['sensoren']} (R8).")
+        drift = src.get("reward_config", {}).get("umgebung", {}).get("drift_erlaubt")
+        if drift is not None and drift != load_reward_config()["umgebung"]["drift_erlaubt"]:
+            sys.exit("Start-Netz passt nicht: Drift erlaubt/verboten ist anders (andere Aktionen, R4).")
+    return info
 
 
 def main():
@@ -64,7 +86,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0, help="Zufalls-Seed (nur bei neuem Training)")
     ap.add_argument("--schritte", type=int, help="pausieren, sobald so viele Schritte erreicht sind")
     ap.add_argument("--minuten", type=float, help="pausieren nach so vielen Minuten (diese Sitzung)")
+    ap.add_argument("--start-netz", help="neues Training mit dem Netz aus diesem Modell (.zip) beginnen")
     args = ap.parse_args()
+    if args.resume and args.start_netz:
+        sys.exit("--start-netz geht nur bei einem neuen Training (beim Fortsetzen gilt der Fortsetzungspunkt).")
 
     with open(TRAIN_CONFIG, "rb") as f:
         train_cfg = tomllib.load(f)
@@ -116,8 +141,10 @@ def main():
         if git["commit"] != cfg["git"]["commit"]:
             note += f" (Start war {(cfg['git']['commit'] or '?')[:7]})"
     else:
-        trainer.new(args.seed)
+        trainer.new(args.seed, start_net=args.start_netz)
         event, note = "start", f"Seed {args.seed}, Commit {(git['commit'] or '?')[:7]}"
+        if args.start_netz:
+            note += f", Start-Netz {args.start_netz}"
     if git["geaendert"]:
         note += ", mit nicht eingecheckten Änderungen"
     trainer._log(event, bemerkung=note)
