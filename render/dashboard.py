@@ -18,16 +18,16 @@ from ursina.shaders import unlit_shader
 
 from game.sensors import RAY_ANGLES, RAY_RANGE
 from game.sim import format_time
-from render.hud import TextLines, TextQuad, _font
+from render.charts import lap_chart, learn_chart, reward_chart
+from render.hud import TextLines, TextQuad
 from render.viewer_ui import BAR, GREY, WHITE, YELLOW, _place, _quad, _texture
-from rl.playback import read_json
-from rl.stats import moving_average, official_best, reward_parts, share_valid, training_seconds
+from rl.netview import group, group_weights
+from rl.stats import official_best, reward_parts, share_valid
 
 HEAD = 0.036                 # Höhe einer Kopfzeile
 GAP = 0.008
 PX = 1100                    # Pixel pro UI-Einheit für die Kurvenbilder (scharf auch auf Retina)
-C_GOOD, C_BAD, C_ABORT = (70, 220, 110), (215, 70, 60), (140, 140, 150)
-C_GOLD, C_MINE, C_LINE = (255, 205, 40), (90, 200, 255), (235, 238, 245)
+C_GOOD = (70, 220, 110)
 STAGES = {1: "Ankommen", 2: "Zuverlässig", 3: "Schnell (Plateau)", 4: "Schneller als ich"}
 
 
@@ -38,141 +38,6 @@ def nr(x):
 def _hms(s):
     s = int(s)
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
-
-
-# ---------- Kurvenbilder ----------
-class Plot:
-    """Hilfe zum Zeichnen: Datenbereich -> Pixel. Ränder links für Beschriftung, unten für die x-Achse."""
-    L, R, T, B = 74, 10, 8, 26
-
-    def __init__(self, w, h, x0, x1, y0, y1):
-        self.img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        self.d = ImageDraw.Draw(self.img)
-        self.w, self.h = w, h
-        self.x0, self.x1 = x0, x1 if x1 > x0 else x0 + 1
-        pad = (y1 - y0) * 0.06 or 1.0
-        self.y0, self.y1 = y0 - pad, y1 + pad
-        self.f = _font(20, False)
-        self.d.rectangle([self.L, self.T, w - self.R, h - self.B], fill=(10, 12, 26, 255))
-
-    def px(self, x, y):
-        X = self.L + (x - self.x0) / (self.x1 - self.x0) * (self.w - self.L - self.R)
-        Y = self.h - self.B - (y - self.y0) / (self.y1 - self.y0) * (self.h - self.T - self.B)
-        return X, Y
-
-    def frac_x(self, x):
-        """x im Datenbereich -> Anteil an der Bildbreite (für die Markierung)."""
-        return self.px(x, self.y0)[0] / self.w
-
-    def data_x(self, frac):
-        """Anteil an der Bildbreite -> x im Datenbereich (für Klicks)."""
-        return self.x0 + (frac * self.w - self.L) / (self.w - self.L - self.R) * (self.x1 - self.x0)
-
-    def y_labels(self, values, fmt):
-        for v in values:
-            _, Y = self.px(self.x0, v)
-            self.d.line([self.L, Y, self.w - self.R, Y], fill=(255, 255, 255, 28), width=1)
-            t = fmt(v)
-            self.d.text((self.L - 6 - self.d.textlength(t, font=self.f), Y - 11), t, font=self.f, fill=(190, 195, 210))
-
-    def x_label(self, left, right):
-        y = self.h - self.B + 3
-        self.d.text((self.L, y), left, font=self.f, fill=(170, 175, 190))
-        self.d.text((self.w - self.R - self.d.textlength(right, font=self.f), y), right, font=self.f, fill=(170, 175, 190))
-
-
-def _ticks(lo, hi, n=3):
-    if hi <= lo:
-        return [lo]
-    step = 10 ** math.floor(math.log10((hi - lo) / n))
-    for m in (1, 2, 5, 10):
-        if (hi - lo) / (step * m) <= n + 1:
-            step *= m
-            break
-    first = math.ceil(lo / step) * step
-    return [first + i * step for i in range(int((hi - first) // step) + 1)]
-
-
-def learn_image(attempts, w, h, window=50):
-    """Reward pro Versuch (Punkte, Farbe = Ergebnis) und gleitender Durchschnitt (Linie)."""
-    n = len(attempts)
-    r = np.array([a.reward for a in attempts]) if n else np.zeros(0)
-    lo, hi = (float(r.min()), float(r.max())) if n else (0.0, 1.0)
-    p = Plot(w, h, 0, max(n - 1, 1), lo, hi)
-    p.y_labels(_ticks(lo, hi), lambda v: nr(int(round(v))))
-    for i, a in enumerate(attempts):
-        X, Y = p.px(i, a.reward)
-        col = C_GOLD if a.gueltig and a.auswertung else C_GOOD if a.gueltig else C_BAD if a.ergebnis == "Crash" else C_ABORT
-        p.d.rectangle([X - 1, Y - 1, X + 1, Y + 1], fill=(*col, 150))
-    if n > 1:
-        avg = moving_average(r, window)
-        p.d.line([p.px(i, v) for i, v in enumerate(avg)], fill=(*C_LINE, 255), width=3)
-    p.x_label("Versuch 1", f"Versuch {nr(attempts[-1].versuch)}" if n else "")
-    return p
-
-
-def laptime_image(attempts, best_steps, mine, w, h):
-    """Gültige Runden als Punkte (Training hell, Auswertung gold), offizielle Bestzeit als Treppe, deine als Linie."""
-    n = len(attempts)
-    times = [a.rundenzeit for a in attempts if a.gueltig and a.rundenzeit]
-    if mine:
-        times.append(mine["time"])
-    if not times:
-        p = Plot(w, h, 0, max(n - 1, 1), 0, 1)
-        p.d.text((p.L + 12, h / 2 - 12), "noch keine gültige Runde", font=p.f, fill=(190, 195, 210))
-        return p
-    lo, hi = min(times), max(times)
-    hi = min(hi, lo + max(20.0, (np.percentile(times, 95) - lo) * 1.3))     # Ausreisser nicht das Bild sprengen lassen
-    p = Plot(w, h, 0, max(n - 1, 1), lo, hi)
-    p.y_labels(_ticks(lo, hi), lambda v: f"{v:.0f} s")
-    index = {a.versuch: i for i, a in enumerate(attempts)}
-    for i, a in enumerate(attempts):
-        if a.gueltig and a.rundenzeit and a.rundenzeit <= p.y1:
-            X, Y = p.px(i, a.rundenzeit)
-            if a.auswertung:
-                p.d.ellipse([X - 4, Y - 4, X + 4, Y + 4], fill=(*C_GOLD, 255))
-            else:
-                p.d.rectangle([X - 1, Y - 1, X + 1, Y + 1], fill=(*C_GOOD, 140))
-    if best_steps:                                     # offizielle Bestzeit (nur Auswertungen, R6) als Treppe
-        pts = []
-        for v, t in best_steps:
-            X, Y = p.px(index.get(v, 0), t)
-            if pts:
-                pts.append((X, pts[-1][1]))
-            pts.append((X, Y))
-        pts.append((p.px(n - 1, best_steps[-1][1])[0], pts[-1][1]))
-        p.d.line(pts, fill=(*C_GOLD, 255), width=3)
-    if mine:                                           # deine Bestzeit (gestrichelt)
-        _, Y = p.px(0, mine["time"])
-        x = p.L
-        while x < w - p.R:
-            p.d.line([x, Y, min(x + 12, w - p.R), Y], fill=(*C_MINE, 255), width=3)
-            x += 20
-        p.d.text((p.L + 6, Y - 26), f"Du {format_time(mine['time'])}", font=p.f, fill=(*C_MINE, 255))
-    p.x_label("Versuch 1", f"Versuch {nr(attempts[-1].versuch)}")
-    return p
-
-
-REWARD_LINES = (("fortschritt", "Fortschritt", (70, 220, 110)), ("zeit", "Zeitstrafe", (255, 140, 60)),
-                ("crash", "Crash", (230, 60, 60)), ("ziel", "Ziel", C_GOLD), ("summe", "Summe", C_LINE))
-
-
-def reward_image(parts, total_frames, w, h):
-    """Aufsummierter Reward über die Fahrt, je Bestandteil eine Linie."""
-    cum = {k: np.cumsum(v) for k, v in parts.items()}
-    vals = np.concatenate([c for c in cum.values()] + [np.zeros(1)])
-    lo, hi = float(vals.min()), float(vals.max())
-    p = Plot(w, h, 0, max(total_frames, 1), lo, hi)
-    p.y_labels(_ticks(lo, hi), lambda v: nr(int(round(v))))
-    n = len(parts["summe"])
-    step = max(1, n // 400)
-    for key, _, col in REWARD_LINES:
-        c = cum[key]
-        if n and (key in ("fortschritt", "zeit", "summe") or abs(c[-1]) > 0):
-            pts = [p.px(i + 1, c[i]) for i in range(0, n, step)] + [p.px(n, c[-1])]
-            p.d.line(pts, fill=(*col, 255), width=3 if key == "summe" else 2)
-    p.x_label("Start", f"{format_time(total_frames / 60)}")
-    return p
 
 
 # ---------- Karten ----------
@@ -237,7 +102,7 @@ class Card:
 
 class ChartCard(Card):
     """Karte mit einem Kurvenbild und einer senkrechten Markierung."""
-    body_h = 0.17
+    body_h = 0.2
 
     def __init__(self, dash):
         super().__init__(dash)
@@ -246,18 +111,16 @@ class ChartCard(Card):
         self.guide = _quad(self.body, color.rgba(1, 1, 1, 0.45), z=-0.005)
         self.guide.enabled = False
         self.marker.enabled = False
-        self.legend = TextQuad("", parent=self.body, height=0.016, origin=(-.5, .5), px=36, color=GREY)
         self.plot = None
         self._key = None
 
     def build(self, w, h):
-        self.chart_h = h - 0.024
+        self.chart_h = h
         _place(self.img, 0, 0, w, self.chart_h)
-        self.legend.position = Vec3(0.004, h - 0.002, 0)
 
     def set_plot(self, plot):
         self.plot = plot
-        self.img.texture = _texture(plot.img)
+        self.img.texture = _texture(plot.image())
 
     def set_marker(self, frac):
         self.marker.enabled = frac is not None and self.plot is not None
@@ -294,10 +157,10 @@ class ShownCard(Card):
 
 
 class LearnCard(ChartCard):
-    key, title = "lernkurve", "1  Lernkurve"
-    help = ("Was du siehst: jeder Punkt ist ein Versuch (grün = Ziel, gold = Ziel in der Auswertung, rot = Crash,\n"
-            "grau = Zeitlimit), seine Höhe der Reward. Die weisse Linie ist der Durchschnitt der letzten 50.\n"
-            "Die rote Markierung ist der gezeigte Versuch. Klick in die Kurve springt zu diesem Versuch.\n\n"
+    key, title = "lernkurve", "Lernkurve"
+    help = ("Was du siehst: den Reward jedes Versuchs über das ganze Training. Die blaue Linie ist der Durchschnitt\n"
+            "der letzten 100 Versuche, das Band zeigt, wo die mittleren 80 % liegen (schmal = gleichmässig).\n"
+            "Goldene Punkte = Auswertungen ohne Zufall. Rot markiert = gezeigter Versuch, Klick springt hin.\n\n"
             "Warum das wichtig ist: Die KI lernt, indem sie den Reward grösser macht. Steigt die Linie, lernt sie.\n"
             "Steigt der Reward, ohne dass die Runden gültiger oder schneller werden, stimmt etwas nicht (R7).")
 
@@ -306,8 +169,7 @@ class LearnCard(ChartCard):
         key = (len(att), self.size_px())
         if key != self._key and att:
             self._key = key
-            self.set_plot(learn_image(att, *self.size_px()))
-            self.legend.text = "Reward pro Versuch  ·  Linie = Schnitt der letzten 50  ·  Klick = hin"
+            self.set_plot(learn_chart(att, *self.size_px()))
 
     def frame(self, ctx):
         i = ctx["focus_index"]
@@ -334,10 +196,10 @@ class LearnCard(ChartCard):
 
 
 class LapCard(LearnCard):
-    key, title = "rundenzeit", "2  Rundenzeit"
-    help = ("Was du siehst: Zeiten aller gültigen Runden. Kleine grüne Punkte = Training (mit Zufall),\n"
-            "goldene = Auswertung (ohne Zufall). Die goldene Treppe ist die offizielle Bestzeit (nur aus\n"
-            "Auswertungen, R6), die blaue gestrichelte Linie deine eigene Bestzeit.\n\n"
+    key, title = "rundenzeit", "Rundenzeit"
+    help = ("Was du siehst: Zeiten aller gültigen Runden. Blasse grüne Punkte = Training (mit Zufall), die grüne\n"
+            "Linie ihr Trend, goldene Punkte = Auswertungen (ohne Zufall). Die goldene Treppe ist die offizielle\n"
+            "Bestzeit (nur aus Auswertungen, R6), die blaue gestrichelte Linie deine eigene Bestzeit.\n\n"
             "Warum das wichtig ist: Das ist das eigentliche Ziel – regelkonform möglichst schnell. Fällt die\n"
             "Treppe unter deine Linie, ist die KI schneller als du (Stufe 4).")
 
@@ -346,8 +208,7 @@ class LapCard(LearnCard):
         key = (len(att), self.size_px(), ctx["mine_time"])
         if key != self._key and att:
             self._key = key
-            self.set_plot(laptime_image(att, official_best(att), ctx["mine"], *self.size_px()))
-            self.legend.text = "gültige Runden  ·  gold = offizielle Bestzeit  ·  blau = du"
+            self.set_plot(lap_chart(att, official_best(att), ctx["mine"], *self.size_px()))
 
     def hover(self, fx, fy, ctx):
         i = self._index_at(fx, ctx)
@@ -358,7 +219,7 @@ class LapCard(LearnCard):
 
 
 class StageCard(Card):
-    key, title, body_h = "stufen", "3  Erfolgsstufen", 0.12
+    key, title, body_h = "stufen", "Erfolgsstufen", 0.12
     help = ("Was du siehst: die vier Erfolgsstufen aus der CLAUDE.md, und bei welchem Versuch sie erreicht wurden.\n"
             "1 Ankommen: erste gültige Runde. 2 Zuverlässig: 5 Auswertungen in Folge im Ziel.\n"
             "3 Schnell: die Bestzeit wird über lange Zeit kaum noch besser (Plateau). 4: schneller als du.\n\n"
@@ -391,7 +252,7 @@ class StageCard(Card):
 
 
 class SensorCard(Card):
-    key, title, body_h = "sensoren", "4  Sensoren", 0.15
+    key, title, body_h = "sensoren", "Sensoren – was die KI sieht", 0.15
     text_every = 0.25
     help = ("Was du siehst: die 17 Sensorstrahlen der KI als Fächer von links (-90°) bis rechts (+90°).\n"
             "Länge und Farbe = Abstand zur Streckenkante (rot = nah, grün = frei, höchstens 100 m).\n\n"
@@ -442,11 +303,13 @@ class SensorCard(Card):
 
 
 class ActionCard(Card):
-    key, title, body_h = "aktionen", "5  Aktionen", 0.11
-    help = ("Was du siehst: was die KI in diesem Moment tut – Lenkung (-1 links bis +1 rechts), Gas, Bremse\n"
-            "und Drift (je 0 bis 1). Höchstens eine Entscheidung pro Physik-Schritt (R4).\n\n"
-            "Warum das wichtig ist: Hier siehst du ihren Fahrstil, z.B. ob sie früh bremst, ruhig lenkt\n"
-            "oder dauernd hin und her zappelt – und wie sich das über die Versuche ändert.")
+    key, title, body_h = "aktionen", "Aktionen – was die KI tut", 0.115
+    SMOOTH = 15                 # Schritte (0.25 s): so lange wird der Befehl für die Anzeige gemittelt
+    help = ("Was du siehst: was die KI gerade befiehlt – Lenkung (-1 links bis +1 rechts), Gas, Bremse und\n"
+            "Drift (je 0 bis 1), gemittelt über die letzte Viertelsekunde. Der weisse Strich bei der Lenkung\n"
+            "zeigt, wo das Lenkrad wirklich steht: Es folgt dem Befehl nur mit begrenztem Tempo (Physik).\n\n"
+            "Warum das wichtig ist: Hier siehst du ihren Fahrstil. Die KI darf 60 Mal pro Sekunde neu\n"
+            "entscheiden (R4) und zappelt oft wild hin und her – ruhiger zu fahren muss sie erst lernen.")
     NAMES = ("Lenkung", "Gas", "Bremse", "Drift")
     COLORS = ((90, 200, 255), (70, 220, 110), (230, 70, 60), (255, 150, 40))
 
@@ -455,45 +318,183 @@ class ActionCard(Card):
         self.labels = [TextQuad(n, parent=self.body, height=0.016, origin=(-.5, 0), px=36) for n in self.NAMES]
         self.bgs = [_quad(self.body, color.rgba(0.1, 0.12, 0.25, 1), z=0.01) for _ in self.NAMES]
         self.fills = [_quad(self.body, color.rgb32(*c)) for c in self.COLORS]
-        self.mid = _quad(self.body, color.rgba(1, 1, 1, 0.6), z=-0.01)
+        self.mid = _quad(self.body, color.rgba(1, 1, 1, 0.35), z=-0.01)
+        self.wheel = _quad(self.body, color.white, z=-0.02)          # wo das Lenkrad wirklich steht
         self.vals = [TextQuad("", parent=self.body, height=0.016, origin=(.5, 0), px=36) for _ in self.NAMES]
+        self.now = np.zeros(4)
+        self.wheel_pos = 0.0
 
     def build(self, w, h):
-        self.bar = (0.1, w - 0.07)
-        self.ys = [h - 0.016 - i * (h - 0.012) / 4 for i in range(4)]
+        self.bar = (0.1, w - 0.075)
+        self.ys = [h - 0.016 - i * (h - 0.014) / 4 for i in range(4)]
         for lab, bg, val, y in zip(self.labels, self.bgs, self.vals, self.ys):
             lab.position = Vec3(0.006, y, 0)
-            _place(bg, self.bar[0], y - 0.008, self.bar[1], y + 0.008)
+            _place(bg, self.bar[0], y - 0.009, self.bar[1], y + 0.009)
             val.position = Vec3(w - 0.006, y, 0)
         cx = (self.bar[0] + self.bar[1]) / 2
-        _place(self.mid, cx - 0.001, self.ys[0] - 0.011, cx + 0.001, self.ys[0] + 0.011)
-        for fill, y in zip(self.fills, self.ys):              # bis zum ersten Bild: leer (nicht Startgrösse)
-            _place(fill, self.bar[0], y - 0.008, self.bar[0] + 0.0005, y + 0.008)
+        _place(self.mid, cx - 0.0008, self.ys[0] - 0.009, cx + 0.0008, self.ys[0] + 0.009)
+        self._show()
 
     def frame(self, ctx):
-        act = ctx["action"]
-        a = [0.0, 0.0, 0.0, 0.0] if act is None else [float(v) for v in act]
+        ep, obs = ctx["episode"], ctx["obs"]
+        if ep is None or not ep.frames:
+            self.now[:] = 0.0
+        else:                                          # Mittel der letzten 0.25 s: ruhig und lesbar
+            i = min(int(ep.frame_at(ctx["t"])), ep.frames - 1)
+            self.now = ep.action[max(0, i - self.SMOOTH + 1):i + 1].astype(np.float64).mean(axis=0)
+        self.wheel_pos = float(obs[20]) if obs is not None else 0.0
+        self._show()
+
+    def _show(self):
         x0, x1 = self.bar
         cx = (x0 + x1) / 2
         for i, (fill, y) in enumerate(zip(self.fills, self.ys)):
-            if i == 0:                                         # Lenkung: von der Mitte aus
-                xe = cx + a[0] * (x1 - x0) / 2
-                _place(fill, min(cx, xe), y - 0.008, max(cx, xe) + 0.0005, y + 0.008)
+            if i == 0:                                 # Lenkung: von der Mitte aus
+                xe = cx + float(np.clip(self.now[0], -1, 1)) * (x1 - x0) / 2
+                _place(fill, min(cx, xe), y - 0.009, max(cx, xe) + 0.0005, y + 0.009)
             else:
-                _place(fill, x0, y - 0.008, x0 + max(0.0005, a[i]) * (x1 - x0), y + 0.008)
+                _place(fill, x0, y - 0.009, x0 + max(0.0005, float(np.clip(self.now[i], 0, 1))) * (x1 - x0), y + 0.009)
+        xw = cx + float(np.clip(self.wheel_pos, -1, 1)) * (x1 - x0) / 2
+        _place(self.wheel, xw - 0.0018, self.ys[0] - 0.012, xw + 0.0018, self.ys[0] + 0.012)
 
     def texts(self, ctx):
-        act = ctx["action"]
-        for i, val in enumerate(self.vals):
-            val.text = "" if act is None else f"{float(act[i]):+.2f}" if i == 0 else f"{float(act[i]):.2f}"
+        for i, val in enumerate(self.vals):            # dieselben (gemittelten) Werte wie die Balken
+            val.text = f"{self.now[i]:+.2f}" if i == 0 else f"{self.now[i]:.2f}"
+
+
+INPUT_GROUPS = (("Strahlen links", range(0, 6)), ("Strahlen vorne", range(6, 11)), ("Strahlen rechts", range(11, 17)),
+                ("Tempo", [17]), ("Winkel", [18]), ("Rutschen", [19]), ("Lenkrad", [20]), ("Steigung", [21]),
+                ("in der Luft", [22]), ("senkrecht", [23]))
+OUTPUTS = ("Lenkung", "Gas", "Bremse", "Drift")
+HIDDEN_DOTS = 16             # je Schicht so viele Punkte (64 Neuronen = je 4 als ein Punkt)
+TOP_LINKS = 26               # so viele der stärksten Verbindungen je Schicht werden gezeichnet
+
+
+class NetCard(Card):
+    key, title, body_h = "netz", "Neuronales Netz – wie die KI denkt", 0.25
+    text_every = 0.25
+    help = ("Was du siehst: das \"Gehirn\" der KI, stark vereinfacht. Links die 24 Beobachtungen (hier zu 10\n"
+            "Gruppen zusammengefasst), in der Mitte zwei Schichten mit je 64 Neuronen (je 4 als ein Punkt),\n"
+            "rechts die 4 Aktionen. Hell = gerade aktiv. Linien = die stärksten Verbindungen: grün verstärkt,\n"
+            "rot hemmt. Das Netz stammt aus dem Snapshot, der dem gezeigten Versuch am nächsten liegt.\n\n"
+            "Warum das wichtig ist: Lernen heisst, die Stärke dieser Verbindungen so zu verändern, dass mehr\n"
+            "Reward herauskommt. Vergleiche einen frühen mit einem späten Versuch: Die Linien sind anders.")
+
+    def __init__(self, dash):
+        super().__init__(dash)
+        self.lines = _quad(self.body, color.white, z=0.02)
+        self.caption = TextQuad("", parent=self.body, height=0.015, origin=(-.5, .5), px=34, color=GREY)
+        self.in_labels = [TextQuad(n, parent=self.body, height=0.0135, origin=(.5, 0), px=32, color=GREY)
+                          for n, _ in INPUT_GROUPS]
+        self.out_labels = [TextQuad("", parent=self.body, height=0.0145, origin=(-.5, 0), px=32) for _ in OUTPUTS]
+        dot = lambda: Entity(parent=self.body, model="circle", shader=unlit_shader, color=color.gray, z=-0.01)  # noqa: E731
+        self.nodes = [[dot() for _ in INPUT_GROUPS], [dot() for _ in range(HIDDEN_DOTS)],
+                      [dot() for _ in range(HIDDEN_DOTS)], [dot() for _ in OUTPUTS]]
+        self.actor = None
+        self._lines_key = None
+        self._last = None
+        self.peak = [1.0, 1.0]                         # grösste Aktivierung je Schicht (für die Helligkeit)
+        self.out_now = np.zeros(4)
+
+    def build(self, w, h):
+        self.cols = (w * 0.26, w * 0.45, w * 0.62, w * 0.76)
+        top, bottom = h - 0.03, 0.01
+        self.pos = []
+        for col, nodes in zip(self.cols, self.nodes):
+            n = len(nodes)
+            ys = [top - (top - bottom) * (k + 0.5) / n for k in range(n)]
+            self.pos.append([(col, y) for y in ys])
+            r = min(0.011, (top - bottom) / n * 0.8)
+            for node, y in zip(nodes, ys):
+                node.position = Vec3(col, y, -0.01)
+                node.scale = Vec3(r, r, 1)
+        for lab, (x, y) in zip(self.in_labels, self.pos[0]):
+            lab.position = Vec3(x - 0.012, y, 0)
+        for lab, (x, y) in zip(self.out_labels, self.pos[3]):
+            lab.position = Vec3(x + 0.014, y, 0)
+        _place(self.lines, 0, 0, w, h - 0.022)
+        self.caption.position = Vec3(0.004, h - 0.002, 0)
+        self._lines_key = None
+        if self.actor is not None:
+            self._draw_lines()
+
+    def refresh(self, ctx):
+        actor = ctx["get_actor"]() if ctx.get("get_actor") else None
+        if actor is not self.actor:
+            self.actor = actor
+            self._lines_key = None
+            self._last = None
+            self.peak = [1.0, 1.0]
+        if self.actor is not None and self._lines_key != (id(self.actor), self.w):
+            self._draw_lines()
+        self.caption.text = (f"{self.actor.label}  ·  24 Eingänge, 2 x 64 Neuronen, 4 Aktionen  ·  dieser Moment"
+                             if self.actor else
+                             "kein Snapshot gefunden (runs/<name>/models/)")
+
+    def _draw_lines(self):
+        """Die stärksten Verbindungen als Bild (ändert sich nur mit dem Netz)."""
+        a = self.actor
+        W, H = max(64, int(self.w * 1100)), max(48, int((self.body_h - 0.022) * 1100))
+        img = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img, "RGBA")
+        h_img = self.body_h - 0.022
+
+        def P(x, y):
+            return x / self.w * W * 2, (1 - y / h_img) * H * 2
+
+        w1 = np.array([[a.w1[r][:, list(idx)].sum() for _, idx in INPUT_GROUPS]
+                       for r in np.array_split(np.arange(a.w1.shape[0]), HIDDEN_DOTS)])
+        layers = [w1, group_weights(a.w2, HIDDEN_DOTS, HIDDEN_DOTS), group_weights(a.w3, len(OUTPUTS), HIDDEN_DOTS)]
+        for li, g in enumerate(layers):
+            flat = np.abs(g).ravel()
+            order = np.argsort(flat)[::-1][:TOP_LINKS]
+            top = flat[order[0]] or 1.0
+            for k in order[::-1]:                      # schwächste zuerst, stärkste obenauf
+                o, i = divmod(int(k), g.shape[1])
+                strength = flat[k] / top
+                col = (80, 225, 120) if g[o, i] > 0 else (235, 85, 75)
+                (x0, y0), (x1, y1) = self.pos[li][i], self.pos[li + 1][o]
+                d.line([P(x0, y0), P(x1, y1)], fill=(*col, int(40 + 180 * strength)), width=max(1, int(1 + 4 * strength)))
+        self.lines.texture = _texture(img.resize((W, H), Image.LANCZOS))
+        self._lines_key = (id(a), self.w)
+
+    def frame(self, ctx):
+        obs = ctx["obs"]
+        if self.actor is None or obs is None:
+            return
+        key = tuple(np.round(obs, 3))
+        if key == self._last:
+            return
+        self._last = key
+        h1, h2, act = self.actor.forward(obs)
+        self.out_now = act
+        ins = [float(np.mean([obs[i] for i in idx])) for _, idx in INPUT_GROUPS]
+        for node, v in zip(self.nodes[0], ins):                     # Eingänge: blau = positiv, orange = negativ
+            k = min(1.0, abs(v))
+            node.color = color.rgba(0.2 + 0.25 * k, 0.25 + 0.6 * k, 0.35 + 0.65 * k, 1) if v >= 0 else \
+                color.rgba(0.35 + 0.65 * k, 0.25 + 0.4 * k, 0.15, 1)
+        for li, h in ((0, h1), (1, h2)):                              # Neuronen: hell = aktiv
+            g = group(h, HIDDEN_DOTS)
+            self.peak[li] = max(self.peak[li] * 0.995, float(g.max()), 1e-6)
+            for node, v in zip(self.nodes[li + 1], g / self.peak[li]):
+                k = float(np.clip(v, 0, 1))
+                node.color = color.rgba(0.18 + 0.82 * k, 0.2 + 0.75 * k, 0.32 + 0.35 * k, 1)
+        for i, node in enumerate(self.nodes[3]):                       # Aktionen
+            k = abs(float(act[i])) if i == 0 else float(act[i])
+            node.color = color.rgba(0.2 + 0.8 * k, 0.22 + 0.7 * k, 0.3 + 0.2 * k, 1)
+
+    def texts(self, ctx):
+        for i, (lab, name) in enumerate(zip(self.out_labels, OUTPUTS)):
+            v = float(self.out_now[i])
+            lab.text = f"{name} {v:+.2f}" if i == 0 else f"{name} {v:.2f}"
 
 
 class RewardCard(ChartCard):
-    key, title = "reward", "6  Reward dieser Fahrt"
+    key, title = "reward", "Reward dieser Fahrt"
     text_every = 0.25
     help = ("Was du siehst: der Reward des laufenden Versuchs, aufsummiert und nach den vier Bestandteilen\n"
             "aus R7 getrennt: Fortschritt (nur neuer Höchststand zählt), Zeitstrafe pro Schritt, Crash-Strafe\n"
-            "und Ziel-Bonus. Weiss = Summe. Darunter die Werte dieses einen Schritts.\n\n"
+            "und Ziel-Bonus. Weiss = Summe. Darüber die Werte dieses einen Schritts.\n\n"
             "Warum das wichtig ist: Genau diese Zahl versucht die KI grösser zu machen. Du siehst, warum\n"
             "Schnellfahren sich lohnt (weniger Zeitstrafe) und wie teuer ein Crash ist.")
 
@@ -503,9 +504,9 @@ class RewardCard(ChartCard):
 
     def build(self, w, h):
         super().build(w, h)
-        self.chart_h = h - 0.046
+        self.chart_h = h - 0.026
         _place(self.img, 0, 0, w, self.chart_h)
-        self.now.position = Vec3(0.004, h - 0.022, 0)
+        self.now.position = Vec3(0.004, h - 0.002, 0)
 
     def refresh(self, ctx):
         self._redraw(ctx)
@@ -525,8 +526,7 @@ class RewardCard(ChartCard):
         self.parts = reward_parts(ep.reward[:frames], ctx["weights"], ctx["result"])
         self.cum = {k: np.cumsum(v) for k, v in self.parts.items()}
         self.total = total
-        self.set_plot(reward_image(self.parts, total, *self.size_px()))
-        self.legend.text = "grün Fortschritt · orange Zeit · rot Crash · gold Ziel · weiss Summe"
+        self.set_plot(reward_chart(self.parts, total, *self.size_px()))
 
     def frame(self, ctx):
         self._redraw(ctx)
@@ -549,7 +549,7 @@ class RewardCard(ChartCard):
 
 
 class StatsCard(Card):
-    key, title, body_h = "statistik", "7  Statistik", 0.11
+    key, title, body_h = "statistik", "Statistik", 0.11
     help = ("Was du siehst: wie viele der letzten 100 Versuche gültige Runden waren, die offizielle Bestzeit,\n"
             "wie viele Versuche und Schritte es bisher gab und wie lange das Training schon läuft.\n\n"
             "Warum das wichtig ist: Ein Schritt = 1/60 s Fahrt. Die Fahrzeit zeigt, wie viel Erfahrung die KI\n"
@@ -577,7 +577,7 @@ class StatsCard(Card):
         ])
 
 
-CARDS = (ShownCard, LearnCard, LapCard, StageCard, SensorCard, ActionCard, RewardCard, StatsCard)
+CARDS = (ShownCard, LearnCard, LapCard, StageCard, SensorCard, NetCard, ActionCard, RewardCard, StatsCard)
 
 
 class Dashboard:
@@ -589,6 +589,7 @@ class Dashboard:
         self.clip = Entity(parent=self.root)
         self.content = Entity(parent=self.clip)
         self.cards = [c(self) for c in CARDS]
+        self.hover_bg = _quad(self.root, color.rgba(0.02, 0.03, 0.08, 0.92), z=-0.19)
         self.hover_text = TextQuad("", parent=self.root, height=0.017, origin=(0, -.5), px=36, heavy=True, z=-0.2)
         self.rect = (0, 0, 1, 1)
         self.scroll = 0.0
@@ -659,9 +660,14 @@ class Dashboard:
                 c.show_guide(fx)
                 if inside:
                     hover = c.hover(fx, 0, ctx)
-                    if hover:
-                        self.hover_text.position = Vec3(mx, c.rect[3] - 0.03, 0)
+                    if hover:                              # direkt über dem Mauszeiger, im Dashboard
+                        self.hover_text.text = hover
+                        half = self.hover_text.scale_x / 2 + 0.008
+                        x = min(max(mx, self.rect[0] + half), self.rect[2] - half)
+                        self.hover_text.position = Vec3(x, my + 0.014, -0.2)
+                        _place(self.hover_bg, x - half, my + 0.008, x + half, my + 0.014 + self.hover_text.scale_y)
         self.hover_text.text = hover
+        self.hover_bg.enabled = bool(hover)
 
     def texts(self, ctx):
         self._ctx = ctx

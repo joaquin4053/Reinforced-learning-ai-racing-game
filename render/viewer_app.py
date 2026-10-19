@@ -110,6 +110,19 @@ class Source:
         """Ergebnis des gezeigten Versuchs (für die Reward-Aufteilung)."""
         return player.current.ergebnis if player.current else ""
 
+    def actor(self, player):
+        """Netz für die Karte "Neuronales Netz": der Snapshot, der dem gezeigten Versuch am nächsten liegt."""
+        from rl.netview import Actor, nearest_snapshot
+        f = self.focus_attempt(player)
+        path = nearest_snapshot(self.run_dir / "models", f) if f is not None else None
+        if path != getattr(self, "_actor_path", None):
+            self._actor_path = path
+            try:
+                self._actor = Actor.from_snapshot(path) if path else None
+            except (OSError, KeyError, RuntimeError, ValueError):
+                self._actor = None
+        return getattr(self, "_actor", None)
+
 
 class ViewerApp:
     def __init__(self, source, player, test_keys="", photo=None):
@@ -394,6 +407,7 @@ class ViewerApp:
             "mine_time": src.mine["time"] if src.mine else None,
             "weights": src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
             "train_s": training_seconds(src.run_dir), "jump": lambda v: src.jump(p, v),
+            "get_actor": lambda: src.actor(p),
         }
         ctx = self.dash_ctx()
         self.ui["panel"].refresh(ctx)

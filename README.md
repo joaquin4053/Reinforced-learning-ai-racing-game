@@ -198,9 +198,11 @@ nach dem Training, liest nur Dateien und läuft mit niedriger Priorität (nice 1
 - **Kameras** (C): Verfolger, Drohne (filmisch: schräg von oben, schwenkt langsam ums Auto), von oben, frei.
 - **Rechts: Dashboard** (P blendet es aus). Karten untereinander, jede mit Klick auf den Titel ein-/ausklappbar,
   **?** = kurze Erklärung (was du siehst, warum das fürs Lernen wichtig ist), Mausrad = scrollen:
-  Gezeigt · 1 Lernkurve (Reward pro Versuch + Durchschnitt, Klick = hinspringen) · 2 Rundenzeit (gültige Runden,
-  offizielle Bestzeit als Treppe, deine als Linie) · 3 Erfolgsstufen · 4 Sensoren (Fächer der 17 Strahlen)
-  · 5 Aktionen (Lenkung, Gas, Bremse, Drift) · 6 Reward dieser Fahrt (nach R7 aufgeteilt) · 7 Statistik.
+  Gezeigt · Lernkurve (Durchschnitt der letzten 100 + Band der mittleren 80 %, Klick = hinspringen) · Rundenzeit
+  (gültige Runden, Trend, offizielle Bestzeit als Treppe, deine als Linie) · Erfolgsstufen · Sensoren (Fächer der
+  17 Strahlen) · Neuronales Netz (vereinfacht: 10 Eingangsgruppen, 2 × 16 Punkte für je 4 Neuronen, 4 Aktionen,
+  die stärksten Verbindungen; live nachgerechnet aus dem nächsten Snapshot) · Aktionen (über 0.25 s gemittelt,
+  weisser Strich = echtes Lenkrad) · Reward dieser Fahrt (nach R7 aufgeteilt) · Statistik.
   Alles bezieht sich auf den gezeigten Versuch und die Stelle der Zeitleiste; auch in `watch.py`.
 - **LIVE:** springt zum neuesten Versuch und folgt dem Training. Neue Versuche erscheinen von selbst.
 - Alle Tastenkürzel: `?` (oder H).

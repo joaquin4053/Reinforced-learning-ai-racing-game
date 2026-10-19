@@ -42,3 +42,34 @@ def test_share_valid():
     attempts = [_a(i, "Ziel" if i % 4 == 0 else "Crash", t=50.0) for i in range(1, 201)]
     assert share_valid(attempts) == (25.0, 100)
     assert share_valid([]) == (0.0, 0)
+
+
+def test_numpy_actor_matches_model_predict(tmp_path):
+    """Das Netz im Dashboard rechnet genau wie model.predict(deterministic=True) – aus Modell und aus Snapshot."""
+    from stable_baselines3 import SAC
+
+    from rl.env import RaceEnv
+    from rl.netview import Actor, nearest_snapshot
+    from rl.recording import save_snapshot
+    env = RaceEnv()
+    model = SAC("MlpPolicy", env, policy_kwargs={"net_arch": [64, 64]}, seed=2, device="cpu")
+    save_snapshot(tmp_path, 40, model, {"versuch": 40})
+    save_snapshot(tmp_path, 60, model, {"versuch": 60})
+    assert nearest_snapshot(tmp_path, 55).name == "versuch_0000040.pt"
+    assert nearest_snapshot(tmp_path, 10).name == "versuch_0000040.pt"
+    for actor in (Actor.from_policy(model.policy), Actor.from_snapshot(tmp_path / "versuch_0000060.pt")):
+        obs, _ = env.reset()
+        for _ in range(30):
+            want, _ = model.predict(obs, deterministic=True)
+            h1, h2, got = actor.forward(obs)
+            assert h1.shape == (64,) and h2.shape == (64,) and (h1 >= 0).all()
+            np.testing.assert_allclose(got, want, atol=1e-5)
+            obs, *_ = env.step(want)
+
+
+def test_grouping():
+    from rl.netview import group, group_weights
+    np.testing.assert_allclose(group(np.arange(8), 4), [0.5, 2.5, 4.5, 6.5])
+    w = np.ones((64, 24))
+    g = group_weights(w, 16, 6)
+    assert g.shape == (16, 6) and g[0, 0] == 4 * 4

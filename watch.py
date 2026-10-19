@@ -132,6 +132,17 @@ class ModelSource(Source):
             i, _ = min(known, key=lambda x: abs(x[1].auswertung_nr - versuch))
             player.select(i)
 
+    def actor(self, player):
+        """Das Netz, das gerade fährt."""
+        from rl.netview import Actor
+        ep, a = player.episode, player.current
+        if ep is None or not hasattr(ep, "policy"):
+            return None
+        if getattr(self, "_actor_for", None) is not ep.policy:
+            self._actor_for = ep.policy
+            self._actor = Actor.from_policy(ep.policy.policy, f"Netz von {self.name(a)} (fährt gerade)")
+        return self._actor
+
     def result(self, player):
         info = (player.episode.info or {}) if player.episode is not None else {}
         return "Ziel" if info.get("gueltige_runde") else "Crash" if info.get("crash") else ""
