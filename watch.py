@@ -7,12 +7,16 @@
     .venv/bin/python watch.py test1 --modell runs/test1/snapshots/model_0000250000.zip
     .venv/bin/python watch.py test1 --gegen-mich        # mit deiner Bestzeit als Geist
 
-Tasten: R = nochmal, C = Kamera, V = Sensorstrahlen, Esc = Beenden.
+Tasten: R = nochmal, N/L = neueste Version sofort, Z = Zeitleiste ein/aus, C = Kamera, V = Sensorstrahlen,
+        Esc = Beenden.
+Zeitleiste (unten): mit der Maus ziehen oder ←/→ -> ältere Versionen ansehen; ganz rechts = LIVE.
 Die KI sieht nur ihre Beobachtung (R5) und fährt mit derselben Simulation wie der Spieler (R3).
 """
 import argparse
+import csv
 import json
 import math
+import shutil
 import sys
 from pathlib import Path
 
@@ -70,7 +74,7 @@ if state_file and state_file.exists():
     state = json.loads(state_file.read_text())
 
 import render  # noqa: E402  GL-Setup für macOS, muss vor Ursina() geladen sein
-from ursina import Ursina, application, camera, time, window  # noqa: E402
+from ursina import Ursina, application, camera, mouse, time, window  # noqa: E402
 
 from game.car import DT  # noqa: E402
 from game.ghost import Ghost, best_time  # noqa: E402
@@ -78,6 +82,7 @@ from render.cameras import CameraRig  # noqa: E402
 from render.effects import DriftEffects, SpeedStreaks  # noqa: E402
 from render.minimap import Minimap  # noqa: E402
 from render.hud import HUD, format_time  # noqa: E402
+from render.timeline import Timeline  # noqa: E402
 from render.world import GhostCar, World, lerp_pose  # noqa: E402
 
 sim, track = env.sim, env.track
@@ -100,7 +105,66 @@ if args.gegen_mich and mine:
 ghosts = [GhostCar(Ghost(p), i) for i, p in enumerate(ghost_files)]
 minimap = Minimap(track, [g.color for g in ghosts])
 
-st = {"obs": None, "acc": 0.0, "prev": None, "message": "", "wait": 1.0, "end_wait": None}
+st = {"obs": None, "acc": 0.0, "prev": None, "message": "", "wait": 1.0, "end_wait": None, "scan": 0.0,
+      "shown_steps": live["schritte"] if live else None}
+timeline = Timeline()
+versions_dir = run_dir / "versionen"
+
+
+def scan_versions():
+    """Alle gespeicherten Versionen {Schritte: Datei}. Im Live-Modus wird die aktuelle Live-Version
+    mit aufbewahrt (falls das Training sie nicht selbst speichert)."""
+    found = {}
+    for folder in (run_dir / "snapshots", versions_dir):
+        for f in folder.glob("model_*.zip"):
+            try:
+                found[int(f.stem.split("_")[1])] = f
+            except (IndexError, ValueError):
+                pass
+    if args.live:
+        try:
+            info = json.loads(live_file.read_text())
+            if info["schritte"] not in found and (run_dir / "live_model.zip").exists():
+                versions_dir.mkdir(exist_ok=True)
+                dst = versions_dir / f"model_{info['schritte']:010d}.zip"
+                shutil.copyfile(run_dir / "live_model.zip", dst)
+                found[info["schritte"]] = dst
+        except (OSError, ValueError, KeyError):
+            pass
+    return dict(sorted(found.items()))
+
+
+def eval_results():
+    """Ergebnis jeder Auswertung aus summary.csv: {Schritte: Text}."""
+    out = {}
+    try:
+        with open(run_dir / "summary.csv") as f:
+            for row in csv.DictReader(f):
+                if row["ereignis"] != "auswertung":
+                    continue
+                if row["gueltig"] == "ja":
+                    out[int(row["schritte"])] = f"Auswertung: Ziel in {format_time(float(row['rundenzeit']))}"
+                else:
+                    out[int(row["schritte"])] = f"Auswertung: {float(row['fortschritt_pct']):.0f} % ({row['ende']})"
+    except (OSError, ValueError, KeyError):
+        pass
+    return out
+
+
+versions = scan_versions()
+results = eval_results()
+timeline.set_versions(list(versions))
+
+
+def load_version(steps):
+    """Gewählte Version laden und die Fahrt neu starten."""
+    global model
+    path = versions.get(steps)
+    if path is None:
+        return
+    model = SAC.load(path, device="cpu")
+    st["shown_steps"] = steps
+    restart()
 LIVE_PAUSE = 2.0      # so lange bleibt das Ergebnis stehen, dann kommt der nächste Stand
 
 
@@ -137,18 +201,29 @@ def on_end(info):
             text += f"\nDu: {format_time(mine['time'])}  ({t - mine['time']:+.2f} s)"
     else:
         text = f"{info['ende'].upper()}\n{info['fortschritt_prozent']:.0f} % geschafft"
-    if args.live:
+    if args.live and timeline.live:
         st["end_wait"] = LIVE_PAUSE
         st["message"] = text + "\ngleich: neuester Stand"
     else:
-        st["message"] = text + "\n[R] nochmal"
+        st["message"] = text + "\n[R] nochmal   ·   Zeitleiste: andere Version"
 
 
 def update():
+    global versions, results
+    st["scan"] -= time.dt
+    if st["scan"] <= 0:                          # neue Versionen einsammeln
+        st["scan"] = 2.0
+        versions = scan_versions()
+        results = eval_results()
+        timeline.set_versions(list(versions))
+    if timeline.dragging:
+        timeline.drag_to_mouse()
+    timeline.show_info(results.get(timeline.selected))
     if st["end_wait"] is not None:
         st["end_wait"] -= time.dt
         if st["end_wait"] <= 0:
             load_live()
+            st["shown_steps"] = live["schritte"] if live else st["shown_steps"]
             restart()
     if st["wait"] > 0:                       # kurz stehen, damit man den Start sieht
         st["wait"] -= time.dt
@@ -178,7 +253,11 @@ def update():
     minimap.update(x, z, heading, [(g.model.x, g.model.z) for g in ghosts])
 
     lines = [track.name]
-    if live:
+    if live and st["shown_steps"] is not None and not (timeline.live and st["shown_steps"] == live["schritte"]):
+        lines.append(f"Gezeigte Version: Schritt {st['shown_steps']:,}   (neueste: {live['schritte']:,})".replace(",", "'"))
+        best = live.get("bestzeit")
+        lines.append(f"Offizielle KI-Bestzeit: {format_time(best) if best is not None else '–'}   Stufe {live.get('stufe', 0)}")
+    elif live:
         lines.append(f"LIVE · Stand: Schritt {live['schritte']:,} · Versuch {live['versuche']:,}".replace(",", "'"))
         best = live.get("bestzeit")
         lines.append(f"Offizielle KI-Bestzeit: {format_time(best) if best is not None else '–'}   Stufe {live.get('stufe', 0)}")
@@ -192,7 +271,8 @@ def update():
     if other:
         lines.append(f"Achtung: andere Version als im Training ({', '.join(other)}) – Zeiten nicht vergleichbar")
     lines.append(f"Wandberührungen: {sim.wall_hits}")
-    lines.append(f"Kamera: {rig.mode} [C]   Sensoren [V]   Nochmal [R]")
+    lines.append(f"Kamera: {rig.mode} [C]   Sensoren [V]   Nochmal [R]   Zeitleiste [Z]"
+                 + ("   Neueste Version [L]" if args.live else ""))
     hud.set(vf, sim.time, "\n".join(lines), st["message"])
     n_cp = len(track.checkpoints)
     best = (live or state or {}).get("bestzeit")
@@ -204,12 +284,37 @@ def update():
 def input(key):
     if key in ("r", "backspace"):
         restart()
+    elif key in ("n", "l") and args.live:          # sofort die neueste Version laden und neu starten
+        timeline.go_live()
+        load_live()
+        st["shown_steps"] = live["schritte"]
+        restart()
+    elif key in ("left arrow", "right arrow"):     # Zeitleiste: eine Version zurück/vor
+        timeline.step(-1 if key == "left arrow" else 1)
+        _pick()
+    elif key == "left mouse down" and timeline.hovered():
+        timeline.dragging = True
+    elif key == "left mouse up" and timeline.dragging:
+        timeline.dragging = False
+        _pick()
+    elif key == "z":                              # Zeitleiste ein-/ausblenden
+        timeline.toggle()
     elif key == "c":
         rig.next_mode()
     elif key == "v":
         world.rays.enabled = not world.rays.enabled
     elif key == "escape":
         application.quit()
+
+
+def _pick():
+    """Version aus der Zeitleiste laden (live = immer die neueste)."""
+    if timeline.live and args.live:
+        load_live()
+        st["shown_steps"] = live["schritte"]
+        restart()
+    elif timeline.selected is not None and timeline.selected != st["shown_steps"]:
+        load_version(timeline.selected)
 
 
 restart()

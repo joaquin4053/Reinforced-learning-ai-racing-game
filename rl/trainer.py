@@ -4,6 +4,7 @@ train.py liest nur die Befehlszeile und ruft Trainer auf. Ablauf:
   - mehrere Umgebungen sammeln Erfahrung (Anzahl je nach Leistungsprofil)
   - alle N Schritte fährt das aktuelle Modell eine deterministische Runde (R6) -> offizielle Zeiten
   - Fortsetzungspunkt alle 30 min und bei jeder Pause (Ctrl+C, Akku, Festplatte)
+  - jeder Versuch wird aufgezeichnet (episodes/, summary.csv), Snapshots nach Versuchen (models/), Plan-Schritt 5
 """
 import os
 import signal
@@ -20,6 +21,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMoni
 from game.ghost import best_time, save_ghost
 from game.sim import format_time
 from rl.env import RaceEnv
+from rl.recording import save_episode, save_snapshot, snapshot_due
 from rl.resources import SpeedLimit, apply_priority, make_profile, power_state
 
 STAGE_TEXT = {1: "Ankommen", 2: "Zuverlässig", 3: "Schnell (Plateau)", 4: "Schneller als ich"}
@@ -27,19 +29,19 @@ SUBPROCESS_FROM = 3       # ab so vielen Umgebungen bekommt jede ihren eigenen P
 
 
 # ---------- Umgebungen ----------
-def _env_factory(reward_cfg, in_subprocess):
+def _env_factory(reward_cfg, in_subprocess, record):
     def init():
         if in_subprocess:   # Ctrl+C / Fenster schliessen trifft nur das Hauptprogramm, das dann sauber pausiert
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        return RaceEnv(config=reward_cfg)
+        return RaceEnv(config=reward_cfg, aufzeichnen=record)
     return init
 
 
-def make_vec_env(reward_cfg, n):
+def make_vec_env(reward_cfg, n, record=True):
     sub = n >= SUBPROCESS_FROM
     cls = SubprocVecEnv if sub else DummyVecEnv
-    return VecMonitor(cls([_env_factory(reward_cfg, sub) for _ in range(n)]))
+    return VecMonitor(cls([_env_factory(reward_cfg, sub, record) for _ in range(n)]))
 
 
 def update_schedule(n_envs, ratio):
@@ -72,8 +74,8 @@ def regroup_buffer(old, n_envs):
 
 
 # ---------- Auswertung (R6: deterministisch, ohne Zufall) ----------
-def evaluate(model, reward_cfg):
-    env = RaceEnv(config=reward_cfg, record=True)
+def evaluate(model, reward_cfg, record=True):
+    env = RaceEnv(config=reward_cfg, record=True, aufzeichnen=record)
     obs, info = env.reset()
     done = False
     while not done:
@@ -109,12 +111,15 @@ class Trainer:
         self.stop_reason = None
         self.model = self.env = None
         self.recent = []                                # letzte 100 Trainings-Fahrten: (gültig, Zeit)
+        rec = cfg["aufzeichnung"]
+        self.record_episodes = rec["episoden"]
+        self.snapshot_every, self.milestones = rec["snapshot_alle_versuche"], set(rec["meilensteine"])
 
     # ---------- Aufbau ----------
     def new(self, seed):
         s = self.cfg["sac"]
         apply_priority(self.profile)
-        self.env = make_vec_env(self.reward_cfg, self.profile.envs)
+        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
         self.model = SAC("MlpPolicy", self.env, learning_rate=s["lernrate"], buffer_size=s["puffer"],
                          batch_size=s["batch"], gamma=s["gamma"], tau=s["tau"], learning_starts=s["lernstart"],
                          policy_kwargs={"net_arch": list(s["netz"])}, tensorboard_log=str(self.run.tb_dir),
@@ -122,11 +127,11 @@ class Trainer:
         self._set_schedule()
         self.state = {"versuche": 0, "laufzeit_s": 0.0, "auswertungen": 0, "serie": 0, "bestzeit": None,
                       "bestzeit_schritte": None, "bestzeit_versuch": None, "bestzeit_verlauf": [], "stufen": {},
-                      "letzte_auswertung": 0, "letzter_snapshot": 0, "sitzungen": []}
+                      "letzte_auswertung": 0, "snapshot": None, "sitzungen": []}
 
     def resume(self, cp_dir):
         apply_priority(self.profile)
-        self.env = make_vec_env(self.reward_cfg, self.profile.envs)
+        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
         self.model = SAC.load(cp_dir / "model.zip", env=self.env, device="cpu",
                               tensorboard_log=str(self.run.tb_dir))
         self.model.load_replay_buffer(cp_dir / "replay_buffer.pkl")
@@ -134,6 +139,8 @@ class Trainer:
             self.model.replay_buffer = regroup_buffer(self.model.replay_buffer, self.profile.envs)
         self._set_schedule()
         self.state = self.run.load_state(cp_dir)
+        self.state.setdefault("snapshot", None)
+        self.state["versuche"] = max(self.state["versuche"], self.run.highest_attempt())   # nie eine Nummer doppelt
         self.run.restore_rng(cp_dir)
         self._merge_records()
 
@@ -164,7 +171,7 @@ class Trainer:
         nice = apply_priority(self.profile)
         if self.profile.envs != old.envs:
             self.env.close()
-            self.env = make_vec_env(self.reward_cfg, self.profile.envs)
+            self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
             self.model.replay_buffer = regroup_buffer(self.model.replay_buffer, self.profile.envs)
             self.model.n_envs = self.profile.envs
             self.model.set_env(self.env)        # angefangene Fahrten werden verworfen, Neustart am Start
@@ -205,17 +212,13 @@ class Trainer:
 
     def on_step(self, hook):
         loc = hook.locals
-        for done, info in zip(loc["dones"], loc["infos"]):
+        for i, (done, info) in enumerate(zip(loc["dones"], loc["infos"])):
             if done:
-                self._episode_done(info)
+                self._episode_done(info, i)
         steps = self.steps
         if steps - self.state["letzte_auswertung"] >= self.cfg["ablauf"]["auswertung_alle_schritte"]:
             self.state["letzte_auswertung"] = steps
             self.run_evaluation()
-        if steps - self.state["letzter_snapshot"] >= self.cfg["ablauf"]["snapshot_alle_schritte"]:
-            self.state["letzter_snapshot"] = steps
-            self.run.snapshot_dir.mkdir(exist_ok=True)
-            self.model.save(self.run.snapshot_dir / f"model_{steps:010d}.zip")
         if steps >= self.next_tb:
             self.next_tb = steps + self.cfg["ablauf"]["tensorboard_alle_schritte"]
             self._tensorboard()
@@ -245,8 +248,8 @@ class Trainer:
         return self.laufzeit_base + time.time() - self.session_start
 
     # ---------- Fahrten ----------
-    def _episode_done(self, info):
-        self.state["versuche"] += 1
+    def _episode_done(self, info, env_index):
+        self._record_attempt(info, "training", env_index)
         valid = info["gueltige_runde"]
         self.recent = (self.recent + [(valid, info["rundenzeit"], info["fortschritt_prozent"])])[-100:]
         logger = self.model.logger
@@ -259,38 +262,73 @@ class Trainer:
                 self.reach_stage(1, f"erste gültige Runde im Training: {format_time(info['rundenzeit'])} "
                                     f"(mit Zufall, keine offizielle Zeit)")
 
-    def run_evaluation(self):
-        info, sim = evaluate(self.model, self.reward_cfg)
+    def _record_attempt(self, info, kind, env_index=None):
+        """Neue Versuchsnummer vergeben, Fahrt nach episodes/ schreiben, ggf. Snapshot, Zeile in summary.csv.
+        Ein Snapshot nach Versuch N heisst versuch_N.pt und steht schon in der Zeile von Versuch N."""
         st = self.state
+        st["versuche"] += 1
+        n = st["versuche"]
+        if snapshot_due(n, self.snapshot_every, self.milestones):
+            path = save_snapshot(self.run.models_dir, n, self.model,
+                                 {"versuch": n, "schritte": self.steps, "lauf": self.run.name,
+                                  "versionen": self.cfg["versionen"], "strecke_id": self.cfg["strecke_id"],
+                                  "zeit": time.strftime("%Y-%m-%d %H:%M:%S")})
+            st["snapshot"] = path.name
+        result = "Ziel" if info["gueltige_runde"] else "Crash" if info["crash"] else "Abbruch"
+        reward = info["episode"]["r"] if "episode" in info else info["reward_summe"]
+        meta = {"versuch": n, "art": kind, "deterministisch": kind == "auswertung", "lauf": self.run.name,
+                "umgebung": env_index, "reward": float(reward), "ergebnis": result, "ende": info["ende"],
+                "fortschritt_prozent": info["fortschritt_prozent"], "rundenzeit": info["rundenzeit"],
+                "dauer_s": info["dauer_s"], "fahrt_schritte": info["schritte"], "trainingsschritte": self.steps,
+                "wandberuehrungen": info["wandberuehrungen"], "snapshot": st["snapshot"],
+                "zeitstempel": time.strftime("%Y-%m-%d %H:%M:%S"), "versionen": info["versionen"],
+                "strecke_id": self.cfg["strecke_id"]}
+        arrays = info.pop("aufzeichnung", None)
+        if arrays is not None:
+            save_episode(self.run.episode_dir, n, arrays, meta)
+        self.run.log_attempt(versuch=n, art=kind, schritte=self.steps, ergebnis=result, ende=info["ende"],
+                             reward=float(reward), rundenzeit=info["rundenzeit"],
+                             fortschritt_pct=info["fortschritt_prozent"], dauer_s=info["dauer_s"],
+                             fahrt_schritte=info["schritte"], wandberuehrungen=info["wandberuehrungen"],
+                             snapshot=st["snapshot"])
+        return n
+
+    def run_evaluation(self):
+        info, sim = evaluate(self.model, self.reward_cfg, self.record_episodes)
+        st = self.state
+        n = self._record_attempt(info, "auswertung")
         st["auswertungen"] += 1
         valid, t = info["gueltige_runde"], info["rundenzeit"]
         st["serie"] = st["serie"] + 1 if valid else 0
         note = ""
         if valid and (st["bestzeit"] is None or t < st["bestzeit"]):
             old = st["bestzeit"]
-            st.update(bestzeit=t, bestzeit_schritte=self.steps, bestzeit_versuch=st["versuche"])
+            st.update(bestzeit=t, bestzeit_schritte=self.steps, bestzeit_versuch=n)
             st["bestzeit_verlauf"].append([self.steps, t])
             self.model.save(self.run.best_model)
-            ghost = save_ghost(sim, "ai", attempt=st["versuche"], driver=f"KI {self.run.name}",
+            ghost = save_ghost(sim, "ai", attempt=n, driver=f"KI {self.run.name}",
                                folder=self.run.ghost_dir)
             st["bestzeit_geist"] = str(ghost)
             self.run.save_records(self._records())
             note = "neue offizielle Bestzeit" + (f" (vorher {format_time(old)})" if old else "")
             self.say(f"Neue offizielle Bestzeit: {format_time(t)}  (Schritt {self.steps:,}".replace(",", "'")
-                     + f", Versuch {st['versuche']})")
+                     + f", Versuch {n})")
         if valid:
             self.model.logger.record("auswertung/rundenzeit", t)
         self.model.logger.record("auswertung/gueltig", float(valid))
         self.model.logger.record("auswertung/fortschritt_prozent", info["fortschritt_prozent"])
         if st["bestzeit"] is not None:
             self.model.logger.record("auswertung/bestzeit", st["bestzeit"])
-        self._log("auswertung", gueltig=valid, rundenzeit=t, fortschritt_pct=info["fortschritt_prozent"],
-                  ende=info["ende"], wandberuehrungen=info["wandberuehrungen"], bemerkung=note)
+        self._check_stages()
+        self.run.log_eval(laufzeit_s=self.laufzeit, schritte=self.steps, versuch=n, gueltig=valid, rundenzeit=t,
+                          bestzeit=st["bestzeit"], fortschritt_pct=info["fortschritt_prozent"], ende=info["ende"],
+                          wandberuehrungen=info["wandberuehrungen"], stufe=self.stage, serie=st["serie"],
+                          snapshot=st["snapshot"], bemerkung=note)
+        self.run.save_version(self.model, self.steps)
         self.run.save_live(self.model, {"schritte": self.steps, "versuche": st["versuche"], "gueltig": valid,
                                         "rundenzeit": t, "fortschritt_pct": info["fortschritt_prozent"],
                                         "ende": info["ende"], "bestzeit": st["bestzeit"], "stufe": self.stage,
                                         "zeit": time.strftime("%Y-%m-%d %H:%M:%S")})
-        self._check_stages()
 
     # ---------- Erfolgsstufen (CLAUDE.md) ----------
     @property

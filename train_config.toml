@@ -1,6 +1,11 @@
 # Einstellungen für das Training (train.py).
 #
-# Beim Start eines NEUEN Trainings werden [sac], [ablauf] und [erfolg] nach runs/<name>/config.json kopiert.
+# Beim Start eines NEUEN Trainings werden [sac], [ablauf], [aufzeichnung]                        # Plan-Schritt 5, Format siehe rl/recording.py
+episoden = true                       # jeden Versuch nach runs/<name>/episodes/ schreiben
+snapshot_alle_versuche = 20           # Actor/Critic nach runs/<name>/models/ (0 = nur Meilensteine)
+meilensteine = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]   # Versuche mit Snapshot, egal wie oben
+
+[erfolg] und [aufzeichnung] nach runs/<name>/config.json kopiert.
 # Beim Fortsetzen (--resume) gilt immer diese Kopie (Regel R9), damit ein Training mit denselben Werten
 # weiterläuft. Änderungen hier wirken also nur auf neue Trainings.
 # [ressourcen] und [profile] betreffen nur, wie stark der Mac belastet wird (nicht, was die KI lernt),
@@ -18,8 +23,12 @@ netz = [64, 64]               # 2 Schichten mit je 64 Neuronen, für Actor und C
 
 [ablauf]
 auswertung_alle_schritte = 25_000     # deterministische Testfahrt (R6), ergibt die offiziellen Zeiten
-snapshot_alle_schritte = 250_000      # Modell-Kopie in runs/<name>/snapshots/
 tensorboard_alle_schritte = 5_000     # so oft werden Kurven für TensorBoard geschrieben
+
+[aufzeichnung]                        # Plan-Schritt 5, Format siehe rl/recording.py
+episoden = true                       # jeden Versuch nach runs/<name>/episodes/ schreiben
+snapshot_alle_versuche = 20           # Actor/Critic nach runs/<name>/models/ (0 = nur Meilensteine)
+meilensteine = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]   # Versuche mit Snapshot, egal wie oben
 
 [erfolg]
 zuverlaessig_serie = 5                # Stufe 2: so viele Auswertungen in Folge im Ziel

@@ -48,6 +48,7 @@ def new_config(args, train_cfg, reward_cfg):
         "sac": train_cfg["sac"],
         "ablauf": train_cfg["ablauf"],
         "erfolg": train_cfg["erfolg"],
+        "aufzeichnung": train_cfg["aufzeichnung"],
         "reward_config": reward_cfg,
         "spiel_config": GAME_CONFIG,
         "strecke": json.loads(track_file.read_text()),
@@ -73,6 +74,11 @@ def main():
         if not run.exists:
             sys.exit(f"Es gibt kein Training '{args.name}' in runs/. Ohne --resume neu starten.")
         cfg = run.load_config()
+        if "aufzeichnung" not in cfg:     # Lauf von vor Schritt 5: Aufzeichnung ab jetzt, in config.json vermerkt (R9)
+            cfg["aufzeichnung"] = {**train_cfg["aufzeichnung"], "ab": time.strftime("%Y-%m-%d %H:%M:%S")}
+            run.config_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+        if run.migrate_old_summary():
+            print("Alte summary.csv aufgeteilt in evals.csv und ereignisse.csv (Original: summary_alt.csv).")
         reward_cfg = cfg["reward_config"]
         versions, _ = current_versions(reward_cfg)
         changed = {k: (cfg["versionen"].get(k), v) for k, v in versions.items() if cfg["versionen"].get(k) != v}

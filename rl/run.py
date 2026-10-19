@@ -2,14 +2,18 @@
 
 runs/<name>/
   config.json        vollständige Konfiguration, Seed, alle Versionen, Git-Commit (beim Start geschrieben)
-  summary.csv        eine Zeile pro Auswertung und pro Ereignis (Start, Pause, Fortsetzung, Profilwechsel, ...)
-  checkpoint/        Fortsetzungspunkt: Modell, Replay-Buffer, Zähler, Zufallszustand
+  summary.csv        eine Zeile pro Versuch: Nummer, Art, Reward, Ergebnis, Rundenzeit, Dauer, aktueller Snapshot
+  evals.csv          eine Zeile pro deterministischer Auswertung (R6) mit Rundenzeit und Bestzeit
+  ereignisse.csv     Start, Pause, Fortsetzung, Profilwechsel, Erfolgsstufen, ...
+  episodes/          jeder Versuch als komprimierte Datei (Format: rl/recording.py)
+  models/            Snapshots alle 20 Versuche + Meilensteine, nur Actor/Critic (Format: rl/recording.py)
+  checkpoint/        Fortsetzungspunkt: Modell, Replay-Buffer, Zähler, Zufallszustand (Replay-Buffer nur hier)
+  versionen/         jede ausgewertete Version (alle 25'000 Schritte), für die Zeitleiste in watch.py
   live_model.zip     Modell der letzten Auswertung (alle 25'000 Schritte), für watch.py --live
   live.json          Stand dazu: Schritte, Versuche, Ergebnis der Auswertung
   rekorde.json       Bestzeit und Erfolgsstufen, sofort bei jeder Änderung geschrieben (überlebt Abstürze)
   best_model.zip     Modell der offiziellen Bestzeit (deterministische Auswertung, R6)
   ghosts/            Fahrt der offiziellen Bestzeit als Geist (für play.py --ghost / replay.py)
-  snapshots/         Modell-Kopien alle N Schritte
   tb/                TensorBoard-Kurven
   code.tar.gz        Kopie des Codes, falls er vom Git-Commit abweicht (nicht eingecheckt oder neue Dateien)
 """
@@ -30,8 +34,14 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
 
-SUMMARY_FIELDS = ["zeit", "laufzeit_s", "schritte", "versuche", "ereignis", "gueltig", "rundenzeit",
-                  "fortschritt_pct", "ende", "wandberuehrungen", "bestzeit", "stufe", "serie", "profil", "bemerkung"]
+SUMMARY_FIELDS = ["zeit", "versuch", "art", "schritte", "ergebnis", "ende", "reward", "rundenzeit", "fortschritt_pct",
+                  "dauer_s", "fahrt_schritte", "wandberuehrungen", "snapshot"]
+EVAL_FIELDS = ["zeit", "laufzeit_s", "schritte", "versuch", "gueltig", "rundenzeit", "bestzeit", "fortschritt_pct",
+               "ende", "wandberuehrungen", "stufe", "serie", "snapshot", "bemerkung"]
+EVENT_FIELDS = ["zeit", "laufzeit_s", "schritte", "versuche", "ereignis", "bestzeit", "stufe", "serie", "profil",
+                "bemerkung"]
+OLD_SUMMARY_FIELDS = ["zeit", "laufzeit_s", "schritte", "versuche", "ereignis", "gueltig", "rundenzeit",
+                      "fortschritt_pct", "ende", "wandberuehrungen", "bestzeit", "stufe", "serie", "profil", "bemerkung"]
 
 
 def git_info():
@@ -66,13 +76,17 @@ class Run:
         self.dir = RUNS_DIR / name
         self.checkpoint_dir = self.dir / "checkpoint"
         self.summary_file = self.dir / "summary.csv"
+        self.evals_file = self.dir / "evals.csv"
+        self.events_file = self.dir / "ereignisse.csv"
+        self.episode_dir = self.dir / "episodes"
+        self.models_dir = self.dir / "models"
         self.config_file = self.dir / "config.json"
         self.tb_dir = self.dir / "tb"
-        self.snapshot_dir = self.dir / "snapshots"
         self.ghost_dir = self.dir / "ghosts"
         self.best_model = self.dir / "best_model.zip"
         self.records_file = self.dir / "rekorde.json"
         self.live_model = self.dir / "live_model.zip"
+        self.versions_dir = self.dir / "versionen"
         self.live_file = self.dir / "live.json"
 
     @property
@@ -91,22 +105,53 @@ class Run:
     def load_config(self):
         return json.loads(self.config_file.read_text())
 
-    # ---------- summary.csv ----------
+    # ---------- summary.csv, evals.csv, ereignisse.csv ----------
+    def log_attempt(self, **row):
+        _append(self.summary_file, SUMMARY_FIELDS, row)
+
+    def log_eval(self, **row):
+        _append(self.evals_file, EVAL_FIELDS, row)
+
     def log(self, **row):
-        new = not self.summary_file.exists()
-        row.setdefault("zeit", time.strftime("%Y-%m-%d %H:%M:%S"))
-        with open(self.summary_file, "a", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
-            if new:
-                w.writeheader()
-            w.writerow({k: _fmt(v) for k, v in row.items()})
+        _append(self.events_file, EVENT_FIELDS, row)
 
     def last_logged_steps(self):
-        """Schritte in der letzten Zeile von summary.csv (0, wenn es keine gibt)."""
+        """Höchste Schrittzahl in den CSV-Dateien (0, wenn es keine gibt)."""
+        return max((_last_steps(f) for f in (self.summary_file, self.evals_file, self.events_file)), default=0)
+
+    def highest_attempt(self):
+        """Höchste schon vergebene Versuchsnummer (Dateien und summary.csv). Nach einem Ende ohne Pause liegt sie
+        über dem Zähler im Fortsetzungspunkt; ab hier weiterzählen, damit keine Datei überschrieben wird."""
+        nums = [0]
+        for folder, pattern in ((self.episode_dir, "versuch_*.npz"), (self.models_dir, "versuch_*.pt")):
+            nums += [int(f.stem.split("_")[1]) for f in folder.glob(pattern) if f.stem.split("_")[1].isdigit()]
+        if self.summary_file.exists():
+            with open(self.summary_file) as f:
+                nums += [int(r["versuch"]) for r in csv.DictReader(f) if r.get("versuch", "").isdigit()]
+        return max(nums)
+
+    def migrate_old_summary(self):
+        """Läufe von vor Schritt 5: summary.csv hatte Auswertungen und Ereignisse gemischt.
+        Aufteilen in evals.csv und ereignisse.csv, alte Datei als summary_alt.csv aufheben. -> True, wenn umgezogen."""
         if not self.summary_file.exists():
-            return 0
-        rows = list(csv.DictReader(open(self.summary_file)))
-        return int(rows[-1]["schritte"]) if rows else 0
+            return False
+        with open(self.summary_file) as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames != OLD_SUMMARY_FIELDS:
+                return False
+            rows = list(reader)
+        for r in rows:
+            if r["ereignis"] == "auswertung":
+                _append(self.evals_file, EVAL_FIELDS, {**r, "versuch": r["versuche"]})
+            else:
+                _append(self.events_file, EVENT_FIELDS, r)
+        self.summary_file.rename(self.dir / "summary_alt.csv")
+        return True
+
+    def save_version(self, model, steps):
+        """Modell dieser Auswertung dauerhaft aufheben (Zeitleiste in watch.py)."""
+        self.versions_dir.mkdir(exist_ok=True)
+        model.save(self.versions_dir / f"model_{steps:010d}.zip")
 
     def save_live(self, model, info):
         """Aktuelles Modell für watch.py --live. Erst das Modell, dann live.json (so passt beides immer zusammen)."""
@@ -164,6 +209,27 @@ class Run:
         random.setstate(rng["python"])
         np.random.set_state(rng["numpy"])
         torch.set_rng_state(rng["torch"])
+
+
+def _append(path, fields, row):
+    new = not path.exists()
+    row.setdefault("zeit", time.strftime("%Y-%m-%d %H:%M:%S"))
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        if new:
+            w.writeheader()
+        w.writerow({k: _fmt(v) for k, v in row.items()})
+
+
+def _last_steps(path):
+    if not path.exists():
+        return 0
+    with open(path) as f:
+        rows = list(csv.DictReader(f))
+    try:
+        return int(rows[-1]["schritte"]) if rows else 0
+    except (KeyError, ValueError):
+        return 0
 
 
 def _fmt(v):

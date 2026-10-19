@@ -19,6 +19,7 @@ import numpy as np
 from game import sensors
 from game.sim import END_REASONS, PHYSICS_VERSION, RULES_VERSION, SENSOR_VERSION, Sim
 from game.track import Track
+from rl.recording import ACTION_HIGH, ACTION_LOW, EpisodeRecorder
 
 ROOT = Path(__file__).resolve().parent.parent
 REWARD_CONFIG = ROOT / "reward_config.toml"
@@ -35,7 +36,9 @@ def load_reward_config(path=REWARD_CONFIG):
 class RaceEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, track_file=None, config=None, record=False):
+    def __init__(self, track_file=None, config=None, record=False, aufzeichnen=False):
+        """record = Fahrt für einen Geist mitschreiben (Sim.history).
+        aufzeichnen = jeden Schritt für episodes/ sammeln (Plan-Schritt 5); am Ende in info["aufzeichnung"]."""
         self.config = config or load_reward_config()
         w = self.config["gewichte"]
         self.k_progress, self.k_time = w["k_fortschritt"], w["k_zeit"]
@@ -52,6 +55,7 @@ class RaceEnv(gym.Env):
         self.action_space = gym.spaces.Box(np.array(low, np.float32), np.array(high, np.float32))
         self.versions = {"physik": PHYSICS_VERSION, "regeln": RULES_VERSION, "sensoren": SENSOR_VERSION,
                          "strecke": self.track.version, "reward": self.config["version"]["reward"]}
+        self.recorder = EpisodeRecorder() if aufzeichnen else None
 
     # ---------- Gymnasium-Schnittstelle ----------
     def reset(self, seed=None, options=None):
@@ -60,6 +64,8 @@ class RaceEnv(gym.Env):
         self.best_progress = self.sim.progress   # Höchststand des Fortschritts in Metern
         self.episode_reward = 0.0
         self.last_reward = {}
+        if self.recorder:
+            self.recorder.start(self.sim, obs)
         return obs, self._info()
 
     def step(self, action):
@@ -83,7 +89,12 @@ class RaceEnv(gym.Env):
 
         terminated = self.sim.result in ("finished", "crashed")
         truncated = self.sim.result == "truncated"
-        return self.sim.observation(), reward, terminated, truncated, self._info()
+        obs, info = self.sim.observation(), self._info()
+        if self.recorder:
+            self.recorder.add(np.clip(act, ACTION_LOW, ACTION_HIGH), reward, self.sim, obs)
+            if terminated or truncated:
+                info["aufzeichnung"] = self.recorder.finish()
+        return obs, reward, terminated, truncated, info
 
     # ---------- Zusatzinfos ----------
     def _info(self):
@@ -102,5 +113,7 @@ class RaceEnv(gym.Env):
             "wandberuehrungen": sim.wall_hits,
             "schritte": sim.frame,
             "reward_teile": dict(self.last_reward),
+            "reward_summe": self.episode_reward,
+            "dauer_s": sim.time,
             "versionen": dict(self.versions),
         }
