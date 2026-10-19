@@ -110,18 +110,39 @@ class Source:
         """Ergebnis des gezeigten Versuchs (für die Reward-Aufteilung)."""
         return player.current.ergebnis if player.current else ""
 
-    def actor(self, player):
-        """Netz für die Karte "Neuronales Netz": der Snapshot, der dem gezeigten Versuch am nächsten liegt."""
-        from rl.netview import Actor, nearest_snapshot
+    def snapshot_path(self, player):
+        """Snapshot, der beim gezeigten Versuch galt (summary.csv), sonst der nächste davor."""
+        from rl.netview import nearest_snapshot
+        a, models = player.current, self.run_dir / "models"
+        if a is not None and getattr(a, "snapshot", "") and (models / a.snapshot).exists():
+            return models / a.snapshot
         f = self.focus_attempt(player)
-        path = nearest_snapshot(self.run_dir / "models", f) if f is not None else None
-        if path != getattr(self, "_actor_path", None):
-            self._actor_path = path
+        return nearest_snapshot(models, f) if f is not None else None
+
+    def _load(self, path):
+        """Snapshot laden (Actor, Critic), die letzten paar bleiben im Speicher (Spulen ohne Warten)."""
+        from rl.netview import load_snapshot_nets
+        cache = self.__dict__.setdefault("_nets", {})
+        if path not in cache:
             try:
-                self._actor = Actor.from_snapshot(path) if path else None
+                cache[path] = load_snapshot_nets(path)
             except (OSError, KeyError, RuntimeError, ValueError):
-                self._actor = None
-        return getattr(self, "_actor", None)
+                cache[path] = (None, None)
+            while len(cache) > 8:
+                cache.pop(next(iter(cache)))
+        return cache[path]
+
+    def nets(self, player):
+        """(Actor, Critic) für die Netz-Karte."""
+        path = self.snapshot_path(player)
+        return self._load(path) if path else (None, None)
+
+    def prev_actor(self, player):
+        """Actor des Snapshots davor (für "Veränderung zeigen")."""
+        from rl.netview import snapshot_before
+        path = self.snapshot_path(player)
+        before = snapshot_before(self.run_dir / "models", path) if path else None
+        return self._load(before)[0] if before else None
 
 
 class ViewerApp:
@@ -407,7 +428,7 @@ class ViewerApp:
             "mine_time": src.mine["time"] if src.mine else None,
             "weights": src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
             "train_s": training_seconds(src.run_dir), "jump": lambda v: src.jump(p, v),
-            "get_actor": lambda: src.actor(p),
+            "get_nets": lambda: src.nets(p), "get_prev": lambda: src.prev_actor(p), "track": src.track,
         }
         ctx = self.dash_ctx()
         self.ui["panel"].refresh(ctx)
@@ -686,7 +707,11 @@ class ViewerApp:
         self.show_car(dt)
         dash = self.ui["panel"]
         ctx = self.dash_ctx() if st["panel"] else None
+        boxes_open = dash.popup.visible or dash.help_box.visible or ui_help_open(self)
+        if self.minimap.frame.enabled == boxes_open:      # Minikarte würde über den Fenstern liegen
+            self.minimap.frame.enabled = not boxes_open
         if ctx:
+            dash.drag(mx, my)                       # Regler im Dashboard, solange die Maustaste gedrückt ist
             dash.frame(ctx, mx, my)
         st["texts_t"] = st.get("texts_t", 0.0) - dt
         if st["texts_t"] <= 0 or changed:            # Texte 20x pro Sekunde reichen (jedes Mal ein neues Bild)
@@ -710,7 +735,9 @@ class ViewerApp:
                 ui["range"].close()
             return
         if key == "escape":
-            if ui["panel"].help_box.visible:
+            if ui["panel"].popup.visible:
+                ui["panel"].popup.close()
+            elif ui["panel"].help_box.visible:
                 ui["panel"].help_box.close()
             elif ui["help"].visible:
                 ui["help"].toggle()
@@ -747,6 +774,7 @@ class ViewerApp:
             a0, a1 = p.list[min(n - 1, int(f0 * n))], p.list[min(n - 1, int(f1 * n))]
             p.set_range(a0.versuch, a1.versuch)
         elif key in ("left mouse up", "right mouse up"):
+            ui["panel"].release()
             a = ui["attempts"]
             if a.dragging and st["pending"] is not None:
                 p.select(st["pending"])
@@ -836,6 +864,12 @@ class ViewerApp:
                 self.input("right mouse down")
                 st["mouse"] = (x0 + (x1 - x0) * float(what[2]), y)
                 self.input("right mouse up")
+            elif what[0] == "neuron":                    # maus:neuron:1:0 = erstes gezeigtes Neuron in Schicht 1
+                card = next(c for c in self.ui["panel"].cards if c.key == "netz")
+                li = int(what[1])
+                i = card.shown[li][int(what[2])]
+                x, y = card.pos[li][i]
+                st["mouse"] = (card.rect[0] + x, card.rect[1] + y)
             elif what[0] == "karte":                     # maus:karte:lernkurve:kopf / :frage / :inhalt:0.3:0.5
                 card = next(c for c in self.ui["panel"].cards if c.key == what[1])
                 r = {"kopf": card.head_rect, "frage": card.q_rect}.get(what[2], card.rect)
@@ -864,6 +898,10 @@ class ViewerApp:
             self.text_input(k)
         else:
             self.input(k)
+
+
+def ui_help_open(app):
+    return app.ui["help"].visible or app.ui["range"].active
 
 
 class ReplayCar:

@@ -200,10 +200,17 @@ nach dem Training, liest nur Dateien und läuft mit niedriger Priorität (nice 1
   **?** = kurze Erklärung (was du siehst, warum das fürs Lernen wichtig ist), Mausrad = scrollen:
   Gezeigt · Lernkurve (Durchschnitt der letzten 100 + Band der mittleren 80 %, Klick = hinspringen) · Rundenzeit
   (gültige Runden, Trend, offizielle Bestzeit als Treppe, deine als Linie) · Erfolgsstufen · Sensoren (Fächer der
-  17 Strahlen) · Neuronales Netz (vereinfacht: 10 Eingangsgruppen, 2 × 16 Punkte für je 4 Neuronen, 4 Aktionen,
-  die stärksten Verbindungen; live nachgerechnet aus dem nächsten Snapshot) · Aktionen (über 0.25 s gemittelt,
+  17 Strahlen) · Neuronales Netz (siehe unten) · Aktionen (über 0.25 s gemittelt,
   weisser Strich = echtes Lenkrad) · Reward dieser Fahrt (nach R7 aufgeteilt) · Statistik.
   Alles bezieht sich auf den gezeigten Versuch und die Stelle der Zeitleiste; auch in `watch.py`.
+- **Netz-Panel** (Actor von SAC: 24 Eingaben → 64 → 64 → 4 Aktionen): Neuronen als Kreise, gefüllt je nach
+  Aktivierung, alle Verbindungen dünn grau, aktive darüber farbig (Beitrag = Gewicht × Aktivierung; grün =
+  verstärkt, orange = hemmt; Schwelle per Regler, geglättet). Umschalter *alle 64 / 12 aktivste* und
+  *Veränderung* (lila = seit dem vorigen Snapshot am stärksten verändert). Darunter der **Critic** (geschätzter
+  Wert der Situation) mit Punkt an der aktuellen Stelle. **Klick auf ein Neuron** zeigt auf einer Karte von oben,
+  wo auf der Strecke es am stärksten aktiv ist. Beim Spulen wechselt das Netz zum Snapshot, der bei diesem Versuch
+  galt (`summary.csv`). Gerechnet wird, indem die gespeicherten Beobachtungen durch den Snapshot gehen
+  (`rl/netview.py`) – das Training wird dafür nicht angefasst.
 - **LIVE:** springt zum neuesten Versuch und folgt dem Training. Neue Versuche erscheinen von selbst.
 - Alle Tastenkürzel: `?` (oder H).
 

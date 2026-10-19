@@ -58,6 +58,10 @@ class Canvas:
         """Datenwert -> Anteil an der Bildbreite (für die Markierung)."""
         return self.px(x, self.y0)[0] / (self.w * SS)
 
+    def frac_y(self, y):
+        """Datenwert -> Anteil an der Bildhöhe von unten (für Punkte auf der Kurve)."""
+        return 1.0 - self.px(self.x0, y)[1] / (self.h * SS)
+
     def data_x(self, frac):
         """Anteil an der Bildbreite -> Datenwert (für Klicks)."""
         return self.x0 + (frac * self.w * SS - self.L) / (self.R - self.L) * (self.x1 - self.x0)
@@ -249,4 +253,21 @@ def reward_chart(parts, total_frames, w, h):
             if key in ("fortschritt", "zeit", "summe") or abs(cum[key][-1]) > 0:
                 c.line([(p + 1, cum[key][p]) for p in pos], col, 4 if key == "summe" else 2)
         c.tag(pos[-1] + 1, cum["summe"][-1], nr(int(round(cum["summe"][-1]))), (240, 242, 250))
+    return c
+
+
+def critic_chart(values, w, h, bright=True, total=None):
+    """Critic-Wert über die Fahrt. bright=False: blasser Hintergrund (der restliche Verlauf).
+    total = Länge der x-Achse in Schritten (fährt das Netz noch, ist der Rest leer)."""
+    v = np.asarray(values, dtype=np.float64)
+    lo, hi = (float(v.min()), float(v.max())) if len(v) else (0.0, 1.0)
+    pad = (hi - lo) * 0.1 or 1.0
+    n = max(total or 0, len(v))
+    c = Canvas(w, h, 0, max(n - 1, 1), lo - pad, hi + pad, top=26)
+    c.legend([("Critic: geschätzter Wert der Situation", C_GOLD, "linie")])   # in beiden Bildern (wird abgeschnitten)
+    c.grid_y(nice_ticks(lo, hi, 3), lambda x: nr(int(round(x))))
+    c.ticks_x([t * 60 for t in nice_ticks(0, n / 60, 5)], lambda x: f"{x / 60:.0f} s")
+    if len(v) > 1:
+        pos = _samples(len(v), 500)
+        c.line([(p, v[p]) for p in pos], C_GOLD if bright else (95, 90, 70), 3 if bright else 2)
     return c

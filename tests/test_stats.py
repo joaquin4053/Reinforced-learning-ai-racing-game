@@ -73,3 +73,29 @@ def test_grouping():
     w = np.ones((64, 24))
     g = group_weights(w, 16, 6)
     assert g.shape == (16, 6) and g[0, 0] == 4 * 4
+
+
+def test_numpy_critic_and_contributions_match_model(tmp_path):
+    """Critic im Dashboard = min(Q1, Q2) von SB3 für die Actor-Aktion; Beiträge = Gewicht x Aktivierung."""
+    import torch
+    from stable_baselines3 import SAC
+
+    from rl.env import RaceEnv
+    from rl.netview import INPUT_NAMES, load_snapshot_nets, snapshot_before
+    from rl.recording import save_snapshot
+    env = RaceEnv()
+    model = SAC("MlpPolicy", env, policy_kwargs={"net_arch": [64, 64]}, seed=4, device="cpu")
+    save_snapshot(tmp_path, 20, model, {"versuch": 20})
+    path = save_snapshot(tmp_path, 40, model, {"versuch": 40})
+    assert snapshot_before(tmp_path, path).name == "versuch_0000020.pt"
+    assert snapshot_before(tmp_path, tmp_path / "versuch_0000020.pt") is None
+    actor, critic = load_snapshot_nets(path)
+    obs = np.stack([env.reset()[0]] + [env.step(env.action_space.sample())[0] for _ in range(20)])
+    h1, h2, squashed, act = actor.forward_batch(obs)
+    with torch.no_grad():
+        q1, q2 = model.critic(torch.as_tensor(obs, dtype=torch.float32), torch.as_tensor(squashed, dtype=torch.float32))
+    np.testing.assert_allclose(critic.value(obs, squashed), torch.min(q1, q2)[:, 0].numpy(), atol=1e-4)
+    c1, c2, c3 = actor.contributions(obs[3], h1[3], h2[3])
+    assert c1.shape == (64, 24) and c2.shape == (64, 64) and c3.shape == (4, 64)
+    np.testing.assert_allclose(c1.sum(axis=1) + actor.b1, actor.w1 @ obs[3] + actor.b1)   # Summe der Beiträge = Eingang
+    assert len(INPUT_NAMES) == 24 and INPUT_NAMES[8] == "Sensor vorne" and INPUT_NAMES[0] == "Sensor 90° L"

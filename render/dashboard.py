@@ -21,7 +21,6 @@ from game.sim import format_time
 from render.charts import lap_chart, learn_chart, reward_chart
 from render.hud import TextLines, TextQuad
 from render.viewer_ui import BAR, GREY, WHITE, YELLOW, _place, _quad, _texture
-from rl.netview import group, group_weights
 from rl.stats import official_best, reward_parts, share_valid
 
 HEAD = 0.036                 # Höhe einer Kopfzeile
@@ -362,133 +361,6 @@ class ActionCard(Card):
             val.text = f"{self.now[i]:+.2f}" if i == 0 else f"{self.now[i]:.2f}"
 
 
-INPUT_GROUPS = (("Strahlen links", range(0, 6)), ("Strahlen vorne", range(6, 11)), ("Strahlen rechts", range(11, 17)),
-                ("Tempo", [17]), ("Winkel", [18]), ("Rutschen", [19]), ("Lenkrad", [20]), ("Steigung", [21]),
-                ("in der Luft", [22]), ("senkrecht", [23]))
-OUTPUTS = ("Lenkung", "Gas", "Bremse", "Drift")
-HIDDEN_DOTS = 16             # je Schicht so viele Punkte (64 Neuronen = je 4 als ein Punkt)
-TOP_LINKS = 26               # so viele der stärksten Verbindungen je Schicht werden gezeichnet
-
-
-class NetCard(Card):
-    key, title, body_h = "netz", "Neuronales Netz – wie die KI denkt", 0.25
-    text_every = 0.25
-    help = ("Was du siehst: das \"Gehirn\" der KI, stark vereinfacht. Links die 24 Beobachtungen (hier zu 10\n"
-            "Gruppen zusammengefasst), in der Mitte zwei Schichten mit je 64 Neuronen (je 4 als ein Punkt),\n"
-            "rechts die 4 Aktionen. Hell = gerade aktiv. Linien = die stärksten Verbindungen: grün verstärkt,\n"
-            "rot hemmt. Das Netz stammt aus dem Snapshot, der dem gezeigten Versuch am nächsten liegt.\n\n"
-            "Warum das wichtig ist: Lernen heisst, die Stärke dieser Verbindungen so zu verändern, dass mehr\n"
-            "Reward herauskommt. Vergleiche einen frühen mit einem späten Versuch: Die Linien sind anders.")
-
-    def __init__(self, dash):
-        super().__init__(dash)
-        self.lines = _quad(self.body, color.white, z=0.02)
-        self.caption = TextQuad("", parent=self.body, height=0.015, origin=(-.5, .5), px=34, color=GREY)
-        self.in_labels = [TextQuad(n, parent=self.body, height=0.0135, origin=(.5, 0), px=32, color=GREY)
-                          for n, _ in INPUT_GROUPS]
-        self.out_labels = [TextQuad("", parent=self.body, height=0.0145, origin=(-.5, 0), px=32) for _ in OUTPUTS]
-        dot = lambda: Entity(parent=self.body, model="circle", shader=unlit_shader, color=color.gray, z=-0.01)  # noqa: E731
-        self.nodes = [[dot() for _ in INPUT_GROUPS], [dot() for _ in range(HIDDEN_DOTS)],
-                      [dot() for _ in range(HIDDEN_DOTS)], [dot() for _ in OUTPUTS]]
-        self.actor = None
-        self._lines_key = None
-        self._last = None
-        self.peak = [1.0, 1.0]                         # grösste Aktivierung je Schicht (für die Helligkeit)
-        self.out_now = np.zeros(4)
-
-    def build(self, w, h):
-        self.cols = (w * 0.26, w * 0.45, w * 0.62, w * 0.76)
-        top, bottom = h - 0.03, 0.01
-        self.pos = []
-        for col, nodes in zip(self.cols, self.nodes):
-            n = len(nodes)
-            ys = [top - (top - bottom) * (k + 0.5) / n for k in range(n)]
-            self.pos.append([(col, y) for y in ys])
-            r = min(0.011, (top - bottom) / n * 0.8)
-            for node, y in zip(nodes, ys):
-                node.position = Vec3(col, y, -0.01)
-                node.scale = Vec3(r, r, 1)
-        for lab, (x, y) in zip(self.in_labels, self.pos[0]):
-            lab.position = Vec3(x - 0.012, y, 0)
-        for lab, (x, y) in zip(self.out_labels, self.pos[3]):
-            lab.position = Vec3(x + 0.014, y, 0)
-        _place(self.lines, 0, 0, w, h - 0.022)
-        self.caption.position = Vec3(0.004, h - 0.002, 0)
-        self._lines_key = None
-        if self.actor is not None:
-            self._draw_lines()
-
-    def refresh(self, ctx):
-        actor = ctx["get_actor"]() if ctx.get("get_actor") else None
-        if actor is not self.actor:
-            self.actor = actor
-            self._lines_key = None
-            self._last = None
-            self.peak = [1.0, 1.0]
-        if self.actor is not None and self._lines_key != (id(self.actor), self.w):
-            self._draw_lines()
-        self.caption.text = (f"{self.actor.label}  ·  24 Eingänge, 2 x 64 Neuronen, 4 Aktionen  ·  dieser Moment"
-                             if self.actor else
-                             "kein Snapshot gefunden (runs/<name>/models/)")
-
-    def _draw_lines(self):
-        """Die stärksten Verbindungen als Bild (ändert sich nur mit dem Netz)."""
-        a = self.actor
-        W, H = max(64, int(self.w * 1100)), max(48, int((self.body_h - 0.022) * 1100))
-        img = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img, "RGBA")
-        h_img = self.body_h - 0.022
-
-        def P(x, y):
-            return x / self.w * W * 2, (1 - y / h_img) * H * 2
-
-        w1 = np.array([[a.w1[r][:, list(idx)].sum() for _, idx in INPUT_GROUPS]
-                       for r in np.array_split(np.arange(a.w1.shape[0]), HIDDEN_DOTS)])
-        layers = [w1, group_weights(a.w2, HIDDEN_DOTS, HIDDEN_DOTS), group_weights(a.w3, len(OUTPUTS), HIDDEN_DOTS)]
-        for li, g in enumerate(layers):
-            flat = np.abs(g).ravel()
-            order = np.argsort(flat)[::-1][:TOP_LINKS]
-            top = flat[order[0]] or 1.0
-            for k in order[::-1]:                      # schwächste zuerst, stärkste obenauf
-                o, i = divmod(int(k), g.shape[1])
-                strength = flat[k] / top
-                col = (80, 225, 120) if g[o, i] > 0 else (235, 85, 75)
-                (x0, y0), (x1, y1) = self.pos[li][i], self.pos[li + 1][o]
-                d.line([P(x0, y0), P(x1, y1)], fill=(*col, int(40 + 180 * strength)), width=max(1, int(1 + 4 * strength)))
-        self.lines.texture = _texture(img.resize((W, H), Image.LANCZOS))
-        self._lines_key = (id(a), self.w)
-
-    def frame(self, ctx):
-        obs = ctx["obs"]
-        if self.actor is None or obs is None:
-            return
-        key = tuple(np.round(obs, 3))
-        if key == self._last:
-            return
-        self._last = key
-        h1, h2, act = self.actor.forward(obs)
-        self.out_now = act
-        ins = [float(np.mean([obs[i] for i in idx])) for _, idx in INPUT_GROUPS]
-        for node, v in zip(self.nodes[0], ins):                     # Eingänge: blau = positiv, orange = negativ
-            k = min(1.0, abs(v))
-            node.color = color.rgba(0.2 + 0.25 * k, 0.25 + 0.6 * k, 0.35 + 0.65 * k, 1) if v >= 0 else \
-                color.rgba(0.35 + 0.65 * k, 0.25 + 0.4 * k, 0.15, 1)
-        for li, h in ((0, h1), (1, h2)):                              # Neuronen: hell = aktiv
-            g = group(h, HIDDEN_DOTS)
-            self.peak[li] = max(self.peak[li] * 0.995, float(g.max()), 1e-6)
-            for node, v in zip(self.nodes[li + 1], g / self.peak[li]):
-                k = float(np.clip(v, 0, 1))
-                node.color = color.rgba(0.18 + 0.82 * k, 0.2 + 0.75 * k, 0.32 + 0.35 * k, 1)
-        for i, node in enumerate(self.nodes[3]):                       # Aktionen
-            k = abs(float(act[i])) if i == 0 else float(act[i])
-            node.color = color.rgba(0.2 + 0.8 * k, 0.22 + 0.7 * k, 0.3 + 0.2 * k, 1)
-
-    def texts(self, ctx):
-        for i, (lab, name) in enumerate(zip(self.out_labels, OUTPUTS)):
-            v = float(self.out_now[i])
-            lab.text = f"{name} {v:+.2f}" if i == 0 else f"{name} {v:.2f}"
-
-
 class RewardCard(ChartCard):
     key, title = "reward", "Reward dieser Fahrt"
     text_every = 0.25
@@ -577,6 +449,8 @@ class StatsCard(Card):
         ])
 
 
+from render.netcard import NetCard  # noqa: E402  (braucht Card von oben)
+
 CARDS = (ShownCard, LearnCard, LapCard, StageCard, SensorCard, NetCard, ActionCard, RewardCard, StatsCard)
 
 
@@ -594,6 +468,8 @@ class Dashboard:
         self.rect = (0, 0, 1, 1)
         self.scroll = 0.0
         self.help_box = HelpBox()
+        self.popup = ImageBox()
+        self.drag_card = None
         self._ctx = None
         self._slow = 0.0
 
@@ -606,6 +482,7 @@ class Dashboard:
         self.root.enabled = v
         if not v:
             self.help_box.close()
+            self.popup.close()
 
     def layout(self, x0, y0, x1, y1, help_center=(0, 0)):
         self.rect = (x0, y0, x1, y1)
@@ -680,9 +557,10 @@ class Dashboard:
     # ---------- Maus ----------
     def click(self, mx, my, ctx):
         """-> True, wenn der Klick im Dashboard war."""
-        if self.help_box.visible:
-            self.help_box.close()
-            return self.contains(mx, my)
+        for box in (self.help_box, self.popup):
+            if box.visible:
+                box.close()
+                return self.contains(mx, my)
         if not self.contains(mx, my):
             return False
         for c in self.cards:
@@ -694,9 +572,20 @@ class Dashboard:
                 self._place_cards()
                 return True
             if not c.collapsed and _inside(c.rect, mx, my):
+                if hasattr(c, "click_abs"):
+                    if c.click_abs(mx, my, ctx) == "drag":            # Regler: weiter ziehen, bis losgelassen
+                        self.drag_card = c
+                    return True
                 c.click((mx - c.rect[0]) / max(c.w, 1e-6), (my - c.rect[1]) / max(c.body_h, 1e-6), ctx)
                 return True
         return True
+
+    def drag(self, mx, my):
+        if self.drag_card is not None:
+            self.drag_card.drag(mx, my)
+
+    def release(self):
+        self.drag_card = None
 
 
 def _inside(r, mx, my):
@@ -728,6 +617,43 @@ class HelpBox:
         self.title.position = Vec3(cx - w / 2 + 0.03, cy + h / 2 - 0.02, 0)
         self.text.position = Vec3(cx - w / 2 + 0.03, cy + h / 2 - 0.065, 0)
         self.close_hint.position = Vec3(cx, cy - h / 2 + 0.018, 0)
+        self.root.enabled = True
+
+    def close(self):
+        self.root.enabled = False
+
+
+class ImageBox:
+    """Bild mit Titel und Text, mitten in der 3D-Ansicht (z.B. "wo ist dieses Neuron aktiv?")."""
+
+    def __init__(self):
+        self.root = Entity(parent=camera.ui, z=-0.7)
+        self.bg = _quad(self.root, color.rgba(0.03, 0.04, 0.1, 0.97), z=0.01)
+        self.img = _quad(self.root, color.white)
+        self.title = TextQuad("", parent=self.root, height=0.028, origin=(-.5, .5), heavy=True, color=YELLOW)
+        self.text = TextQuad("", parent=self.root, height=0.018, origin=(-.5, .5), px=38)
+        self.close_hint = TextQuad("Klick oder Esc = schliessen", parent=self.root, height=0.016, origin=(0, 0),
+                                   px=34, color=GREY)
+        self.root.enabled = False
+
+    @property
+    def visible(self):
+        return self.root.enabled
+
+    def open(self, title, image, text, center):
+        self.title.text, self.text.text = title, text
+        self.img.texture = _texture(image)
+        cx, cy = center
+        iw = 0.62
+        ih = iw * image.size[1] / image.size[0]
+        w = iw + 0.05
+        h = ih + 0.15 + self.text.scale_y
+        top = cy + h / 2
+        _place(self.bg, cx - w / 2, cy - h / 2, cx + w / 2, top)
+        self.title.position = Vec3(cx - w / 2 + 0.025, top - 0.018, 0)
+        _place(self.img, cx - iw / 2, top - 0.06 - ih, cx + iw / 2, top - 0.06)
+        self.text.position = Vec3(cx - w / 2 + 0.025, top - 0.075 - ih, 0)
+        self.close_hint.position = Vec3(cx, cy - h / 2 + 0.016, 0)
         self.root.enabled = True
 
     def close(self):

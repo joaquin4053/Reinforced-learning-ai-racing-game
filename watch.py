@@ -132,16 +132,22 @@ class ModelSource(Source):
             i, _ = min(known, key=lambda x: abs(x[1].auswertung_nr - versuch))
             player.select(i)
 
-    def actor(self, player):
-        """Das Netz, das gerade fährt."""
-        from rl.netview import Actor
+    def nets(self, player):
+        """(Actor, Critic) des Netzes, das gerade fährt."""
+        from rl.netview import Actor, Critic
         ep, a = player.episode, player.current
         if ep is None or not hasattr(ep, "policy"):
-            return None
-        if getattr(self, "_actor_for", None) is not ep.policy:
-            self._actor_for = ep.policy
-            self._actor = Actor.from_policy(ep.policy.policy, f"Netz von {self.name(a)} (fährt gerade)")
-        return self._actor
+            return None, None
+        if getattr(self, "_nets_for", None) is not ep.policy:
+            self._nets_for = ep.policy
+            pol = ep.policy.policy
+            self._nets_now = (Actor.from_policy(pol, f"Netz von {self.name(a)} (fährt gerade)"), Critic.from_policy(pol))
+        return self._nets_now
+
+    def snapshot_path(self, player):
+        from rl.netview import nearest_snapshot
+        f = self.focus_attempt(player)
+        return nearest_snapshot(self.run_dir / "models", f) if f else None
 
     def result(self, player):
         info = (player.episode.info or {}) if player.episode is not None else {}

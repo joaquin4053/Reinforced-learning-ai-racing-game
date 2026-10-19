@@ -43,6 +43,7 @@ class Attempt:
     rundenzeit: float | None
     fortschritt: float
     dauer: float
+    snapshot: str = ""          # Snapshot, der bei diesem Versuch galt (models/, aus summary.csv)
 
     @property
     def gueltig(self):
@@ -60,7 +61,7 @@ class Attempt:
         num = lambda v: float(v) if v not in ("", None) else None   # noqa: E731
         return Attempt(int(r["versuch"]), r["art"], int(r["schritte"] or 0), r["ergebnis"], r["ende"],
                        num(r["reward"]) or 0.0, num(r["rundenzeit"]), num(r["fortschritt_pct"]) or 0.0,
-                       num(r["dauer_s"]) or 0.0)
+                       num(r["dauer_s"]) or 0.0, r.get("snapshot") or "")
 
 
 class EpisodeIndex:
