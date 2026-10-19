@@ -10,13 +10,14 @@ from game import sensors
 
 _ANGLES = sensors.RAY_ANGLES_DEG
 _FRONT = sensors.RAY_COUNT // 2          # Strahl geradeaus
-_TEMPO = sensors.SIZE - 4                # Index "tempo" (siehe Tabelle in CLAUDE.md)
+_TEMPO = [row[0] for row in sensors.LAYOUT].index("tempo")   # Index "tempo" (siehe Tabelle in CLAUDE.md)
 
 
 def rule_action(obs):
     rays_m = obs[:sensors.RAY_COUNT] * sensors.RAY_RANGE
     weights = rays_m ** 4                                     # lange Strahlen zählen viel mehr
-    target_deg = float(np.sum(_ANGLES * weights) / np.sum(weights))
+    total = float(np.sum(weights))
+    target_deg = float(np.sum(_ANGLES * weights) / total) if total > 0 else 0.0   # alles 0: z.B. über einer Lücke
     steer = np.clip(target_deg / 25.0, -1.0, 1.0)
 
     speed = obs[_TEMPO] * sensors.SPEED_NORM                 # m/s

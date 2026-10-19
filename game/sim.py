@@ -1,7 +1,7 @@
-"""Simulation ohne Grafik: Auto + Strecke + Regeln + Sensoren.
+"""Simulation ohne Grafik: Auto + Strecke + Regeln + Sensoren (Spiel v2, 3D).
 
 Benutzung (gleich für Spieler, KI und Tests):
-    sim = Sim(Track.load("tracks/map01.json"))
+    sim = Sim(Track.load("tracks/poly01.json"))
     obs = sim.reset()
     events = sim.step({"steer": 0.0, "throttle": 1.0, "brake": 0.0})   # oder sim.step([0.0, 1.0, 0.0])
     if sim.done: ...
@@ -11,28 +11,18 @@ Alle Zahlenwerte und Versionsnummern stehen in config.toml.
 """
 from dataclasses import dataclass
 
-import numpy as np
-
+from . import sensors
 from .car import DT, Car
 from .config import CONFIG, VERSIONS
-from . import sensors
-from .raycast import closest_wall
 
-# Versionsnummern (Regel R8) – werden in config.toml gepflegt
 PHYSICS_VERSION = VERSIONS["physik"]
 RULES_VERSION = VERSIONS["regeln"]
 SENSOR_VERSION = VERSIONS["sensoren"]
 
-RAY_ANGLES, RAY_RANGE = sensors.RAY_ANGLES, sensors.RAY_RANGE   # Sensoren: siehe game/sensors.py
-
-_COLL = CONFIG["kollision"]
-COLLISION_CIRCLES = tuple(_COLL["kreise"])
-COLLISION_RADIUS = _COLL["radius"]
-RESTITUTION = _COLL["abprall"]
-WALL_FRICTION = _COLL["wandreibung"]
+RAY_ANGLES, RAY_RANGE = sensors.RAY_ANGLES, sensors.RAY_RANGE
 
 END_REASONS = {
-    "wall": "Wand berührt",
+    "fell": "Runtergefallen",
     "stuck": "Kein Fortschritt",
     "wrong_way": "Falsche Richtung",
     "time_limit": "Zeitlimit",
@@ -44,7 +34,7 @@ _RULES = CONFIG["regeln"]
 @dataclass
 class Rules:
     """Wann endet eine Fahrt als Crash? Gilt für Spieler und KI gleich (Werte aus config.toml)."""
-    wall_is_crash: bool = _RULES["wall_is_crash"]
+    fall_depth: float = _RULES["fall_depth"]
     stuck_seconds: float = _RULES["stuck_seconds"]
     stuck_min_progress: float = _RULES["stuck_min_progress"]
     wrong_way_meters: float = _RULES["wrong_way_meters"]
@@ -71,7 +61,6 @@ def format_time(t):
 
 
 def format_delta(d):
-    """Differenz zum Geist, z.B. '+0.80 s' (langsamer) oder '-1.25 s' (schneller)."""
     return f"{d:+.2f} s"
 
 
@@ -80,27 +69,29 @@ class Sim:
         self.track = track
         self.rules = rules or Rules()
         self.record = record
-        self.gates = track.checkpoints + [track.finish_gate]  # Reihenfolge einer Runde
+        self.gates = track.checkpoints + [track.finish_gate]
         self.reset()
 
     # ---------- Ablauf ----------
     def reset(self):
         t = self.track
-        self.car = Car(t.start_pos[0], t.start_pos[1], t.start_heading)
+        self.car = Car(t.start_pos[0], t.start_y, t.start_pos[1], t.start_heading)
         self.frame = 0
-        self.lap = 0                 # fertige Runden
-        self.next_gate = 0           # Index in self.gates
-        self.splits = []             # Zeit bei jedem durchfahrenen Checkpoint/Ziel
+        self.lap = 0
+        self.next_gate = 0
+        self.splits = []
         self.done = False
-        self.result = None           # "finished" (Ziel), "crashed" (R11 a/b) oder "truncated" (Zeitlimit)
+        self.result = None           # "finished", "crashed" oder "truncated"
         self.end_reason = None       # Schlüssel aus END_REASONS
         self.finish_time = None
-        self.wall_contact = False    # berührt das Auto gerade eine Wand?
-        self.wall_hits = 0           # wie oft die Wand neu berührt wurde (für Strafe/Statistik)
-        self.wall_frames = 0         # wie viele Schritte das Auto an der Wand war
+        self.wall_contact = False    # gerade gegen eine Blockseite gedrückt?
+        self.wall_hits = 0           # Abpraller an Blockseiten
+        self.wall_frames = 0
+        self.jumps = 0               # wie oft abgehoben
+        self.airtime_total = 0.0
         dist, self._seg, self.track_dir, self.lateral = t.progress_at(*t.start_pos)
         self._raw_dist = dist
-        self.progress = dist         # Meter entlang der Strecke, läuft über Runden weiter
+        self.progress = dist
         self.best_progress = dist
         self._progress_log = [dist]
         self.history = [self._pose()] if self.record else []
@@ -113,33 +104,35 @@ class Sim:
 
     @property
     def total_length(self):
-        return self.track.length * self.track.laps
+        return self.track.length
 
     @property
     def progress_pct(self):
         return 100.0 if self.result == "finished" else max(0.0, min(100.0, 100 * self.progress / self.total_length))
 
     def step(self, act):
-        """Einen Zeitschritt (1/60 s) simulieren.
+        """Einen Zeitschritt (1/60 s) simulieren. Zu grosse Werte werden abgeschnitten (R4).
 
-        act: {"steer": -1..1, "throttle": 0..1, "brake": 0..1, "drift": 0..1 (optional)}
-             oder als Liste [steer, throttle, brake, drift]. Zu große Werte werden abgeschnitten (R4).
-        Rückgabe: Events dieses Schritts, z.B. {"checkpoint": "CP 2", "split": 12.35}
+        Rückgabe: Events dieses Schritts, z.B. {"checkpoint": "CP 2", "split": 12.35, "takeoff": True}
         """
         events = {"checkpoint": None, "split": None, "lap": False, "finished": False, "crashed": False,
-                  "truncated": False, "wall": False, "wall_hit": False}
+                  "truncated": False, "wall": False, "wall_hit": False, "takeoff": False, "landed": 0.0}
         if self.done:
             return events
-        x0, z0 = self.car.x, self.car.z
+        c = self.car
+        x0, z0, was_grounded = c.x, c.z, c.grounded
         act = as_action(act)
-        self.car.update(act.get("steer", 0.0), act.get("throttle", 0.0), act.get("brake", 0.0),
-                        act.get("drift", 0.0))
-        touching = self._collide()
-        # "wall" = Auto ist an der Wand, "wall_hit" = neue Berührung (vorher frei)
-        events["wall"], events["wall_hit"] = touching, touching and not self.wall_contact
-        self.wall_contact = touching
-        self.wall_frames += touching
+        c.update(act.get("steer", 0.0), act.get("throttle", 0.0), act.get("brake", 0.0),
+                 act.get("drift", 0.0), self.track)
+        events["wall"], events["wall_hit"] = c.hit, c.hit and not self.wall_contact
+        self.wall_contact = c.hit
+        self.wall_frames += c.hit
         self.wall_hits += events["wall_hit"]
+        events["takeoff"] = was_grounded and not c.grounded
+        events["landed"] = c.landed
+        self.jumps += events["takeoff"]
+        if not c.grounded:
+            self.airtime_total += DT
         self.frame += 1
         self._rays = None
         self._update_progress()
@@ -153,23 +146,21 @@ class Sim:
     def _check_gates(self, x0, z0, events):
         gate = self.gates[self.next_gate]
         if not gate.crossed(x0, z0, self.car.x, self.car.z):
-            return  # nur das NÄCHSTE Tor zählt -> Reihenfolge erzwungen, keine Abkürzungen
+            return  # nur das NÄCHSTE Tor zählt -> Reihenfolge erzwungen (R1)
         self.splits.append(self.time)
         events["checkpoint"], events["split"] = gate.name, self.time
         self.next_gate += 1
         if self.next_gate == len(self.gates):
-            self.next_gate = 0
-            self.lap += 1
+            self.lap = 1
             events["lap"] = True
-            if self.lap >= self.track.laps:
-                self._end("finished", None, events)
+            self._end("finished", None, events)
 
     def _check_rules(self, events):
-        r = self.rules
+        r, c = self.rules, self.car
         stuck_frames = int(r.stuck_seconds / DT)
         reason = None
-        if self.wall_contact and r.wall_is_crash:
-            reason = "wall"
+        if self._fallen():
+            reason = "fell"                                   # von der Strecke gefallen (R2)
         elif self.best_progress - self.progress > r.wrong_way_meters:
             reason = "wrong_way"
         elif self.frame >= stuck_frames and \
@@ -177,8 +168,19 @@ class Sim:
             reason = "stuck"
         if reason:
             self._end("crashed", reason, events)
-        elif self.time >= r.time_limit:   # Zeitlimit: kein Crash, sondern Abbruch (R11)
+        elif self.time >= r.time_limit:
             self._end("truncated", "time_limit", events)
+
+    def _fallen(self):
+        """Runtergefallen (R2)? Verglichen wird mit der Fahrbahn genau dort, wo das Auto ist (mit Querneigung),
+        nicht mit der Mittellinie: In Steilkurven liegt die Innenseite viele Meter tiefer als die Mitte."""
+        c, t, depth = self.car, self.track, self.rules.fall_depth
+        if c.y < t.min_y - depth:
+            return True
+        g = t.ground(c.x, c.z)
+        if g is not None and c.y > g - depth:                 # Fahrbahn direkt darunter -> nicht gefallen
+            return False
+        return c.y < t.surface_height_at(self.progress, self.lateral) - depth
 
     def _end(self, result, reason, events):
         self.done = True
@@ -191,59 +193,26 @@ class Sim:
         else:
             events["crashed"] = True
 
-    # ---------- Physik ----------
-    def _collide(self):
-        """Auto aus Wänden herausschieben. True, wenn eine Wand berührt wurde."""
-        car, walls = self.car, self.track.walls
-        hit = False
-        fx, fz = car.forward
-        for _ in range(3):
-            moved = False
-            for off in COLLISION_CIRCLES:
-                d, nx, nz = closest_wall(car.x + fx * off, car.z + fz * off, walls)
-                if d < COLLISION_RADIUS:
-                    pen = COLLISION_RADIUS - d
-                    car.x += nx * pen
-                    car.z += nz * pen
-                    vn = car.vx * nx + car.vz * nz
-                    if vn < 0:
-                        car.vx -= (1 + RESTITUTION) * vn * nx
-                        car.vz -= (1 + RESTITUTION) * vn * nz
-                    car.vx *= WALL_FRICTION
-                    car.vz *= WALL_FRICTION
-                    car.yaw_rate *= 0.9          # Wand bremst auch das Drehen
-                    hit = moved = True
-            if not moved:
-                break
-        return hit
-
     def _update_progress(self):
         t = self.track
         dist, self._seg, self.track_dir, self.lateral = t.progress_at(self.car.x, self.car.z, hint=self._seg)
-        delta = dist - self._raw_dist
-        if t.is_loop:  # über die Start/Ziel-Linie hinweg nicht springen
-            if delta > t.length / 2:
-                delta -= t.length
-            elif delta < -t.length / 2:
-                delta += t.length
+        self.progress += dist - self._raw_dist
         self._raw_dist = dist
-        self.progress += delta
         self.best_progress = max(self.best_progress, self.progress)
         self._progress_log.append(self.progress)
 
     def _pose(self):
         c = self.car
-        return (c.x, c.z, c.heading)
+        return (c.x, c.y, c.z, c.heading, c.pitch, c.roll)
 
     # ---------- Sensoren (für die KI, siehe game/sensors.py) ----------
     def rays(self):
         """Distanzen der Sensorstrahlen in Metern."""
         if self._rays is None:
             c = self.car
-            self._rays = sensors.ray_distances(c.x, c.z, c.heading, self.track.walls)
+            self._rays = sensors.ray_distances(c.x, c.z, c.y, c.heading, self.track)
         return self._rays
 
     def observation(self):
-        """Was die KI "sieht" (nur Fahrersicht, Regel R5): Vektor mit sensors.SIZE Zahlen,
-        Reihenfolge wie die Tabelle in CLAUDE.md."""
+        """Was die KI "sieht" (nur Fahrersicht, Regel R5), Reihenfolge wie die Tabelle in CLAUDE.md."""
         return sensors.observe(self.car, self.track_dir, self.rays())

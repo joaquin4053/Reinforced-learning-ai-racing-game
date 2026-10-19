@@ -15,7 +15,7 @@ STEER_RATE = 4.5      # Tastatur: so schnell geht die Lenkung zum Ziel (pro Seku
 RETURN_RATE = 10.0    # ...und so schnell zurück in die Mitte
 DEADZONE = 0.08       # Gamepad-Stick: kleine Ausschläge ignorieren
 
-RESTART_KEYS = ("r", "backspace", "gamepad y", "gamepad start")
+RESTART_KEYS = ("r", "t", "backspace", "gamepad y", "gamepad start")
 
 
 def _approach(value, target, step):

@@ -14,7 +14,7 @@
 reward = 1
 
 [gewichte]
-# 1 Punkt pro Meter neuer Strecke. Eine Runde (1329 m) bringt so ca. 1329 Punkte, pro Schritt bei
+# 1 Punkt pro Meter neuer Strecke. Eine Fahrt über Strecke 1 (966 m) bringt so ca. 966 Punkte, pro Schritt bei
 # Vollgas knapp 1 Punkt – eine gut handhabbare Größenordnung für das Lernverfahren (SAC).
 k_fortschritt = 1.0
 
@@ -24,7 +24,7 @@ k_fortschritt = 1.0
 k_zeit = 0.1
 
 # Einmalig bei Crash (stecken geblieben oder falsche Richtung, R11). Groß genug, dass absichtliches
-# "schnell crashen" sich nie lohnt, aber klein gegen den Fortschritt einer ganzen Runde (~1329),
+# "schnell crashen" sich nie lohnt, aber klein gegen den Fortschritt einer ganzen Strecke (~900-1100 m),
 # damit die KI sich traut, schneller zu fahren.
 k_crash = 50.0
 
@@ -33,5 +33,5 @@ k_crash = 50.0
 k_ziel = 100.0
 
 [umgebung]
-strecke = "tracks/map01.json"
+strecke = "tracks/poly01.json"
 drift_erlaubt = true    # R4: die KI darf wie der Spieler driften (4. Aktion)

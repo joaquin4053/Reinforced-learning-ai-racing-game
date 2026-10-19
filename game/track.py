@@ -1,20 +1,32 @@
-"""Strecke aus einer JSON-Datei in tracks/ laden.
+"""Strecke aus Bausteinen laden (tracks/<map>.json).
 
-Format (siehe tracks/map01.json):
+Format:
 {
-  "name": "Erste Runde",
-  "version": 2,                bei jeder Änderung der Map erhöhen -> alte Geister/Bestzeiten zählen nicht mehr
-  "width": 20,                 Streckenbreite in Metern
-  "loop": true,                Rundkurs? (false = Start und Ziel an verschiedenen Stellen)
-  "laps": 1,                   Runden (nur bei loop)
-  "smooth": 8,                 Zwischenpunkte pro Abschnitt für weiche Kurven (1 = eckig)
-  "points": [[x, z], ...],     Mittellinie in Fahrtrichtung (Meter)
-  "start": 0,                  Index in points: Startlinie
-  "checkpoints": [4, 9, 14],   Indizes in points, in Fahrtreihenfolge
-  "finish": 0                  Index in points: Ziellinie (bei Rundkurs = start)
+  "name": "Einstieg",
+  "version": 1,                 bei jeder Änderung erhöhen -> alte Geister/Bestzeiten zählen nicht mehr
+  "width": 28,                  Fahrbahnbreite in Metern (inkl. Rand)
+  "rand": false,                Streckenrand als Standard für alle Bausteine (einzeln überschreibbar)
+  "start": [x, y, z, richtung], Startpunkt und Fahrtrichtung in Grad (0 = +z, 90 = +x)
+  "pieces": [                   Bausteine in Fahrtrichtung, jeder setzt am Ende des vorherigen an:
+    ["start"],                  Startlinie (das Auto steht kurz dahinter)
+    ["straight", 40],           Gerade, Länge in m
+    ["turn", 90, 30],           Kurve: Winkel in Grad (+ = rechts, - = links), Radius der Mittellinie
+    ["turn", 90, 60, 25],       ... mit Überhöhung (Steilkurve) in Grad, baut sich weich auf und ab
+    ["slope", 40, 6],           Steigung/Gefälle: Länge, Höhenänderung (weich ein- und auslaufend)
+    ["ramp", 14, 3],            Absprung-Rampe: steigt gleichmässig und endet mit einer Kante
+    ["gap", 20, -2],            Lücke ohne Fahrbahn: Länge, Höhe der Landung relativ zur Kante
+    ["straight", 200, {"rand": true}],   jeder Baustein: optional zuletzt {"rand": true/false} = Kante am Rand
+                                         (Standard aus "rand" der Strecke, sonst ohne)
+    ["turn", 90, 80, {"breite": 50}],    ... und/oder {"breite": m}: Breite ändert sich weich über den Baustein
+    ["checkpoint"],             Checkpoint (in dieser Reihenfolge zu durchfahren, Regel R1)
+    ["finish"]                  Ziel
+  ]
 }
 
-Koordinaten: flache Ebene (x, z), +z = Norden. Heading h: Vorwärts = (sin h, cos h).
+Daraus entstehen:
+- die Mittellinie in 3D (für Fortschritt, Checkpoints, Runterfallen),
+- eine Höhenkarte der Fahrbahn im Raster RES (für Physik und Sensoren): Höhe oder NaN (= keine Fahrbahn).
+Die Fahrbahn schwebt frei: Wer über die Kante fährt, fällt (Regel R2).
 """
 import json
 import math
@@ -22,19 +34,42 @@ from pathlib import Path
 
 import numpy as np
 
+RES = 0.25          # m Rasterweite der Höhenkarte
+SAMPLE = 0.1        # m Abstand der Abtastpunkte entlang der Mittellinie beim Aufbau
+CENTER_STEP = 1.0   # m Abstand der Mittellinienpunkte für Fortschritt und Darstellung
 START_OFFSET = 6.0  # das Auto steht so viele Meter nach der Startlinie
+GATE_EXTRA = 1.0    # Tore sind so viel breiter als die Fahrbahn
+BANK_RAMP = 0.25    # Anteil einer Steilkurve, über den sich die Überhöhung auf- bzw. abbaut
+KANTE_WIDTH = 0.3   # m: Kante am Rand ("rand": true): niedrige, runde Stufe ganz aussen ...
+KANTE_HEIGHT = 0.4  # m: ... etwa halbe Radhöhe. So steil, dass man nicht hochfahren kann: langsam quer
+                    #    hinein -> prallt ab, zu schnell quer hinein -> hüpft drüber (config.toml [kollision])
+BAND_WIDTH = 1.4    # m: davor ein flacher, aufgemalter rot-weisser Streifen (nur Anzeige)
+CURB_WIDTH = BAND_WIDTH + KANTE_WIDTH    # so breit ist der Randbereich (für Tore/Anzeige)
+
+
+def curb_profile(lat, width, border=False):
+    """Zusätzliche Höhe der Fahrbahn quer zur Fahrtrichtung (lat = Abstand zur Mitte, m).
+
+    width und border dürfen Arrays sein (passend zu lat). Mit Rand: ganz aussen eine niedrige, runde
+    Stufe (KANTE_HEIGHT). Ohne Rand: flach bis zur Abbruchkante."""
+    border = np.asarray(border, dtype=bool)
+    t = np.clip((np.abs(lat) - (np.asarray(width) / 2 - KANTE_WIDTH)) / KANTE_WIDTH, 0.0, 1.0)
+    rise = np.clip(t / 0.7, 0.0, 1.0)
+    rise = rise * rise * (3 - 2 * rise)                 # steil hoch, oben rund
+    return np.where(border, KANTE_HEIGHT * rise, 0.0)
 
 
 class Gate:
     """Eine Linie quer über die Strecke (Start, Checkpoint oder Ziel)."""
 
-    def __init__(self, center, tangent, half_width, dist, name):
-        self.center = center          # (x, z)
-        self.tangent = tangent        # Fahrtrichtung (Einheitsvektor)
-        left = np.array([-tangent[1], tangent[0]])
-        self.a = center + left * half_width
-        self.b = center - left * half_width
-        self.dist = dist              # Meter ab Startlinie entlang der Mittellinie
+    def __init__(self, center, y, tangent, half_width, dist, name):
+        self.center = np.asarray(center, dtype=np.float64)   # (x, z)
+        self.y = float(y)
+        self.tangent = np.asarray(tangent, dtype=np.float64)
+        left = np.array([-self.tangent[1], self.tangent[0]])
+        self.a = self.center + left * half_width
+        self.b = self.center - left * half_width
+        self.dist = dist
         self.name = name
 
     def crossed(self, x0, z0, x1, z1):
@@ -52,28 +87,72 @@ def _segments_intersect(p1, p2, q1, q2):
     return (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0)
 
 
-def _catmull_rom(points, sub, loop):
-    """Kontrollpunkte -> dichte, weiche Linie. Gibt (Punkte, Index-Zuordnung) zurück."""
-    n = len(points)
-    out, index_of = [], {}
-    segments = n if loop else n - 1
-    for i in range(segments):
-        p0 = points[(i - 1) % n] if loop or i > 0 else points[0]
-        p1, p2 = points[i], points[(i + 1) % n]
-        p3 = points[(i + 2) % n] if loop or i + 2 < n else points[-1]
-        index_of[i] = len(out)
-        for k in range(sub):
-            t = k / sub
-            t2, t3 = t * t, t * t * t
-            out.append(0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
-                              + (-p0 + 3 * p1 - 3 * p2 + p3) * t3))
-    if loop:
-        out.append(out[0])           # geschlossen: letzter Punkt = erster Punkt
-        index_of[n] = len(out) - 1
-    else:
-        index_of[n - 1] = len(out)
-        out.append(points[-1])
-    return np.array(out), index_of
+def build_path(start, pieces, border_default=False, width_default=16.0):
+    """Bausteine -> dichte Abtastpunkte entlang der Mittellinie.
+
+    Rückgabe: dict mit Arrays x, y, z, heading, road (Fahrbahn ja/nein), kind (Baustein-Index),
+    tilt (Querneigung: Höhe = tilt × seitlicher Abstand, + = rechts höher) und
+    marks: Liste (Abtastindex, "start"/"checkpoint"/"finish").
+    """
+    x, y, z, h = float(start[0]), float(start[1]), float(start[2]), math.radians(start[3])
+    xs, ys, zs, hs, road, kind, tilt, border, marks = [x], [y], [z], [h], [True], [0], [0.0], [border_default], []
+    widths = [float(width_default)]
+    rand = border_default
+    w_now = w_from = w_to = float(width_default)
+
+    def add(nx, ny, nz, nh, on_road, k, tl=0.0):
+        xs.append(nx), ys.append(ny), zs.append(nz), hs.append(nh), road.append(on_road), kind.append(k)
+        tilt.append(tl), border.append(rand), widths.append(w_now)
+
+    for k, piece in enumerate(pieces):
+        name, args = piece[0], list(piece[1:])
+        opts = args.pop() if args and isinstance(args[-1], dict) else {}
+        rand = bool(opts.get("rand", border_default))
+        w_from, w_to = widths[-1], float(opts.get("breite", widths[-1]))
+        if name in ("start", "checkpoint", "finish"):
+            marks.append((len(xs) - 1, name))
+            continue
+        if name == "turn":
+            angle, radius = math.radians(args[0]), float(args[1])
+            length = abs(angle) * radius
+        else:
+            length = float(args[0])
+        n = max(1, int(round(length / SAMPLE)))
+        y0 = y
+        for i in range(1, n + 1):
+            t = i / n
+            on_road = True
+            tw = t * t * (3 - 2 * t)                            # Breite weich ändern
+            w_now = w_from + (w_to - w_from) * tw
+            if name == "straight":
+                ny = y0
+            elif name == "turn":
+                h_new = h + angle / n
+                x += math.sin((h + h_new) / 2) * length / n      # Sehne in der Mitte des Teilbogens
+                z += math.cos((h + h_new) / 2) * length / n
+                h = h_new
+                bank = math.radians(float(args[2])) if len(args) > 2 else 0.0
+                ramp = min(1.0, t / BANK_RAMP, (1 - t) / BANK_RAMP)
+                ramp = ramp * ramp * (3 - 2 * ramp)               # weich ein- und auslaufen
+                inner = 1.0 if angle > 0 else -1.0                # Innenseite (rechts bei Rechtskurve) tiefer
+                add(x, y0, z, h, True, k, -inner * math.tan(bank) * ramp)
+                continue
+            elif name == "slope":
+                ny = y0 + float(args[1]) * (1 - math.cos(math.pi * t)) / 2
+            elif name == "ramp":
+                ny = y0 + float(args[1]) * t
+            elif name == "gap":
+                ny = y0 + float(args[1]) * t
+                on_road = False
+            else:
+                raise ValueError(f"Unbekannter Baustein '{name}' (Nr. {k + 1})")
+            x += math.sin(h) * length / n
+            z += math.cos(h) * length / n
+            add(x, ny, z, h, on_road, k)
+        y = ys[-1]
+    return {"x": np.array(xs), "y": np.array(ys), "z": np.array(zs), "heading": np.array(hs),
+            "road": np.array(road), "kind": np.array(kind), "tilt": np.array(tilt), "border": np.array(border),
+            "width": np.array(widths), "marks": marks}
 
 
 class Track:
@@ -82,129 +161,160 @@ class Track:
         self.id = Path(path).stem if path else data.get("name", "map")
         self.name = data.get("name", self.id)
         self.version = int(data.get("version", 1))
-        self.width = float(data.get("width", 14))
-        self.is_loop = bool(data.get("loop", True))
-        self.laps = int(data.get("laps", 1)) if self.is_loop else 1
-        pts = np.array(data["points"], dtype=np.float64)
-        sub = max(1, int(data.get("smooth", 8)))
+        self.width = float(data.get("width", 12))
+        self.is_loop = False                       # Bausteinstrecken gehen von Start bis Ziel
+        self.laps = 1
+        self.pieces = data["pieces"]
+        p = build_path(data["start"], self.pieces, bool(data.get("rand", False)), self.width)
+        self.width = float(p["width"].max())                   # breiteste Stelle (Tore, Anzeige)
+        self.samples = p
 
-        # Mittellinie: dichte Punkte + gefahrene Meter bis zu jedem Punkt
-        self.center, index_of = _catmull_rom(pts, sub, self.is_loop)
+        # ---- Mittellinie (grob, 1 m) für Fortschritt, Tore, Darstellung ----
+        seg = np.hypot(np.diff(p["x"]), np.diff(p["z"]))
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        idx = np.unique(np.concatenate([np.searchsorted(cum, np.arange(0, cum[-1], CENTER_STEP)), [len(cum) - 1]]))
+        self._sample_cum = cum
+        self.center = np.stack([p["x"][idx], p["z"][idx]], axis=1)
+        self.center_y = p["y"][idx]
+        self.center_road = p["road"][idx]
         seg = np.diff(self.center, axis=0)
         self.seg_len = np.hypot(seg[:, 0], seg[:, 1])
         self.cum = np.concatenate([[0.0], np.cumsum(self.seg_len)])
         self.seg_dir = seg / self.seg_len[:, None]
+        tangents = np.stack([np.sin(p["heading"][idx]), np.cos(p["heading"][idx])], axis=1)
+        left = np.stack([-tangents[:, 1], tangents[:, 0]], axis=1)
+        self.center_width = p["width"][idx]
+        self.center_tilt = p["tilt"][idx]
+        self.left_edge = self.center + left * self.center_width[:, None] / 2
+        self.right_edge = self.center - left * self.center_width[:, None] / 2
 
-        # Startlinie bei "start": Strecke so verschieben, dass dort Meter 0 ist
-        start_i = index_of[int(data.get("start", 0))]
-        self.start_index = start_i
-        self._dist_offset = self.cum[start_i]
-        self.length = self.cum[-1] if self.is_loop else self.cum[-1] - self._dist_offset
-
-        half = self.width / 2
-        self.start_gate = self._gate(start_i, "Start")
-        self.checkpoints = [self._gate(index_of[i], f"CP {k + 1}")
-                            for k, i in enumerate(data.get("checkpoints", []))]
-        finish_i = index_of[int(data.get("finish", 0 if self.is_loop else len(pts) - 1))]
-        self.finish_gate = self._gate(finish_i, "Ziel")
-        if self.is_loop:
-            self.finish_gate.dist = self.length
-
-        t = self.start_gate.tangent
-        self.start_heading = math.atan2(t[0], t[1])
-        sx, sz = self.start_gate.center + t * START_OFFSET
+        # ---- Start, Checkpoints, Ziel ----
+        marks = p["marks"]
+        names = [m[1] for m in marks]
+        if names.count("start") != 1 or names.count("finish") != 1:
+            raise ValueError(f"{self.id}: braucht genau einen 'start' und ein 'finish'")
+        start_i = dict((m[1], m[0]) for m in marks)["start"]
+        self._dist_offset = cum[start_i]
+        self.checkpoints, finish = [], None
+        for si, name in marks:
+            g = self._gate(si, p, cum, name)
+            if name == "checkpoint":
+                g.name = f"CP {len(self.checkpoints) + 1}"
+                self.checkpoints.append(g)
+            elif name == "finish":
+                finish = g
+            else:
+                self.start_gate = g
+        self.finish_gate = finish
+        self.length = finish.dist
+        h = p["heading"][start_i]
+        self.start_heading = float(h)
+        sx = p["x"][start_i] + math.sin(h) * START_OFFSET
+        sz = p["z"][start_i] + math.cos(h) * START_OFFSET
         self.start_pos = (float(sx), float(sz))
-
-        self._build_walls(half)
-        self._validate(data)
+        self._build_heightmap(p)
+        self.start_y = self.ground(sx, sz)
+        self._validate()
 
     @staticmethod
     def load(path):
         path = Path(path)
         return Track(json.loads(path.read_text()), path)
 
-    # ---------- Aufbau ----------
-    def _tangent(self, i):
-        n = len(self.seg_dir)
-        if self.is_loop:
-            d = self.seg_dir[(i - 1) % n] + self.seg_dir[i % n]
-        else:
-            d = self.seg_dir[max(i - 1, 0)] + self.seg_dir[min(i, n - 1)]
-        return d / np.hypot(*d)
+    def _gate(self, si, p, cum, name):
+        h = p["heading"][si]
+        tangent = (math.sin(h), math.cos(h))
+        dist = cum[si] - self._dist_offset
+        g = Gate((p["x"][si], p["z"][si]), p["y"][si], tangent, p["width"][si] / 2 + GATE_EXTRA, dist, name)
+        g.width = float(p["width"][si])
+        return g
 
-    def _gate(self, i, name):
-        dist = (self.cum[i] - self._dist_offset) % self.cum[-1] if self.is_loop else self.cum[i] - self._dist_offset
-        return Gate(self.center[i].copy(), self._tangent(i), self.width / 2 + 1.0, dist, name)
+    # ---------- Höhenkarte ----------
+    def _build_heightmap(self, p):
+        """Fahrbahn quer zur Mittellinie in ein Raster stempeln: Höhe je Zelle, NaN = keine Fahrbahn."""
+        on = p["road"]
+        xs, ys, zs, hs, tl = p["x"][on], p["y"][on], p["z"][on], p["heading"][on], p["tilt"][on]
+        bd, ws = p["border"][on], p["width"][on]
+        si = np.nonzero(on)[0]
+        lat = np.arange(-self.width / 2, self.width / 2 + 1e-9, SAMPLE)
+        inside = np.abs(lat[None, :]) <= ws[:, None] / 2 + 1e-9   # jede Stelle so breit wie dort vorgesehen
+        rx, rz = np.cos(hs)[:, None], -np.sin(hs)[:, None]
+        px = (xs[:, None] + rx * lat[None, :])[inside]
+        pz = (zs[:, None] + rz * lat[None, :])[inside]
+        py = (ys[:, None] + tl[:, None] * lat[None, :]
+              + curb_profile(lat[None, :], ws[:, None], bd[:, None]))[inside]
+        owner = np.broadcast_to(self._sample_cum[si][:, None], inside.shape)[inside]   # Meter entlang der Strecke
+        margin = 2.0
+        self.x0, self.z0 = px.min() - margin, pz.min() - margin
+        nx = int(math.ceil((px.max() + margin - self.x0) / RES)) + 1
+        nz = int(math.ceil((pz.max() + margin - self.z0) / RES)) + 1
+        ix = np.floor((px - self.x0) / RES).astype(np.int64)
+        iz = np.floor((pz - self.z0) / RES).astype(np.int64)
+        flat = iz * nx + ix
+        total = np.bincount(flat, weights=py, minlength=nx * nz)       # Mittelwert je Zelle -> glatte Rampen
+        count = np.bincount(flat, minlength=nx * nz)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            height = np.where(count > 0, total / np.maximum(count, 1), np.nan)
+        lo = np.full(nx * nz, np.inf)
+        hi = np.full(nx * nz, -np.inf)
+        np.minimum.at(lo, flat, owner)
+        np.maximum.at(hi, flat, owner)
+        crowded = (hi - lo) > 3 * self.width
+        if crowded.any():
+            c = int(np.argmax(crowded))
+            raise ValueError(f"{self.id}: Strecke überlappt sich bei ca. ({self.x0 + c % nx * RES:.0f}, "
+                             f"{self.z0 + c // nx * RES:.0f}) – Brücken/Kreuzungen gibt es (noch) nicht")
+        self.height = height.reshape(nz, nx)
+        self.nx, self.nz = nx, nz
+        self.min_y = float(np.nanmin(self.height))
 
-    def _build_walls(self, half):
-        tangents = np.array([self._tangent(i) for i in range(len(self.center))])
-        left = np.stack([-tangents[:, 1], tangents[:, 0]], axis=1)
-        self.left_edge = self.center + left * half
-        self.right_edge = self.center - left * half
-        walls = []
-        for edge in (self.left_edge, self.right_edge):
-            walls += [(*a, *b) for a, b in zip(edge[:-1], edge[1:])]
-        if not self.is_loop:  # Strecke vorne und hinten zumachen
-            walls.append((*self.left_edge[0], *self.right_edge[0]))
-            walls.append((*self.left_edge[-1], *self.right_edge[-1]))
-        self.walls = np.array(walls, dtype=np.float64)  # (S, 4): x1 z1 x2 z2
+    def ground(self, x, z):
+        """Höhe der Fahrbahn bei (x, z), oder None wenn dort keine Fahrbahn ist."""
+        return self.ground_slope(x, z)[0]
 
-    def _validate(self, data):
-        """Hilfreiche Fehlermeldungen für selbstgebaute Maps."""
+    def ground_slope(self, x, z):
+        """(Höhe, Steigung in x, Steigung in z) der Fahrbahn bei (x, z). Höhe None = keine Fahrbahn,
+        Steigung None = am Rand (dort ist sie unbekannt)."""
+        fx = (x - self.x0) / RES - 0.5
+        fz = (z - self.z0) / RES - 0.5
+        i, j = math.floor(fx), math.floor(fz)
+        if i < 0 or j < 0 or i + 1 >= self.nx or j + 1 >= self.nz:
+            return None, None, None
+        h = self.height
+        h00, h10, h01, h11 = h.item(j, i), h.item(j, i + 1), h.item(j + 1, i), h.item(j + 1, i + 1)
+        tx, tz = fx - i, fz - j
+        if h00 == h00 and h10 == h10 and h01 == h01 and h11 == h11:      # alle vier Zellen Fahrbahn
+            height = (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz
+            sx = ((h10 - h00) * (1 - tz) + (h11 - h01) * tz) / RES
+            sz = ((h01 - h00) * (1 - tx) + (h11 - h10) * tx) / RES
+            return height, sx, sz
+        v = h.item(j + (tz >= 0.5), i + (tx >= 0.5))                       # am Rand: nächste Zelle
+        return (v, None, None) if v == v else (None, None, None)
+
+    def _validate(self):
         dists = [g.dist for g in self.checkpoints]
         if dists != sorted(dists) or (dists and (dists[0] <= 0 or dists[-1] >= self.finish_gate.dist)):
             raise ValueError(f"{self.id}: Checkpoints müssen in Fahrtrichtung zwischen Start und Ziel liegen")
-        # Überlappen sich zwei Streckenteile? (Abstand Mittellinie < Breite + Wand)
-        c = self.center[:-1] if self.is_loop else self.center
-        d = np.hypot(c[:, None, 0] - c[None, :, 0], c[:, None, 1] - c[None, :, 1])
-        along = np.abs(self.cum[:len(c), None] - self.cum[None, :len(c)])
-        if self.is_loop:
-            along = np.minimum(along, self.cum[-1] - along)
-        close = (d < self.width + 2.0) & (along > self.width * 2.5)
-        if close.any():
-            i = int(np.argwhere(close)[0][0])
-            x, z = self.center[i]
-            raise ValueError(f"{self.id}: Strecke überlappt sich bei ca. ({x:.0f}, {z:.0f}) – Punkte weiter auseinander legen")
-        # Zu enge Kurven -> innere Wand würde sich falten
-        a, b = self.seg_dir[:-1], self.seg_dir[1:]
-        turn = np.abs(np.arctan2(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0], np.sum(a * b, axis=1)))
-        radius = self.seg_len[1:] / np.maximum(turn, 1e-9)
-        if radius.min() < self.width / 2 + 1.0:
-            x, z = self.center[int(radius.argmin()) + 1]
-            raise ValueError(f"{self.id}: Kurve bei ca. ({x:.0f}, {z:.0f}) ist zu eng für Breite {self.width:.0f} m")
+        if self.start_y is None:
+            raise ValueError(f"{self.id}: Am Start ist keine Fahrbahn")
 
     # ---------- Abfragen ----------
     def progress_at(self, x, z, hint=None, window=40):
-        """Fortschritt für eine Position: (Meter ab Startlinie, Segment-Index, Tangente, seitl. Abstand).
-
-        hint = Segment-Index vom letzten Schritt -> nur in der Nähe suchen. Wichtig, wenn
-        die Strecke an sich selbst vorbeiführt: dann wird nicht auf den falschen Teil gesprungen.
-        """
+        """(Meter ab Startlinie, Segment-Index, Tangente, seitl. Abstand) für eine Position."""
         n = len(self.seg_dir)
-        if hint is None:
-            idx = np.arange(n)
-        elif self.is_loop:
-            idx = np.arange(hint - window, hint + window + 1) % n
-        else:
-            idx = np.arange(max(0, hint - window), min(n, hint + window + 1))
-        a = self.center[idx]
-        e = self.seg_dir[idx]
-        L = self.seg_len[idx]
+        idx = np.arange(n) if hint is None else np.arange(max(0, hint - window), min(n, hint + window + 1))
+        a, e, L = self.center[idx], self.seg_dir[idx], self.seg_len[idx]
         t = np.clip((x - a[:, 0]) * e[:, 0] + (z - a[:, 1]) * e[:, 1], 0.0, L)
         px, pz = a[:, 0] + e[:, 0] * t, a[:, 1] + e[:, 1] * t
         k = int(np.argmin((px - x) ** 2 + (pz - z) ** 2))
         i = int(idx[k])
         dist = self.cum[i] + t[k] - self._dist_offset
-        if self.is_loop:
-            dist %= self.cum[-1]
         ex, ez = e[k]
-        lateral = (x - px[k]) * ez - (z - pz[k]) * ex  # >0 = rechts der Mitte
+        lateral = (x - px[k]) * ez - (z - pz[k]) * ex
         return float(dist), i, (float(ex), float(ez)), float(lateral)
 
     def segment_at(self, dist):
-        """Index des Mittellinien-Abschnitts `dist` Meter nach der Startlinie (+ Meter seit Abschnittsbeginn)."""
-        d = dist + self._dist_offset
-        d = d % self.cum[-1] if self.is_loop else min(max(d, 0.0), self.cum[-1])
+        d = min(max(dist + self._dist_offset, 0.0), self.cum[-1])
         i = min(int(np.searchsorted(self.cum, d, side="right")) - 1, len(self.seg_dir) - 1)
         return i, d - self.cum[i]
 
@@ -212,3 +322,19 @@ class Track:
         """Punkt + Tangente auf der Mittellinie, `dist` Meter nach der Startlinie."""
         i, rest = self.segment_at(dist)
         return self.center[i] + self.seg_dir[i] * rest, self.seg_dir[i]
+
+    def surface_height_at(self, dist, lateral):
+        """Höhe der Fahrbahnoberfläche `dist` m nach dem Start, `lateral` m neben der Mitte (+ = rechts).
+        Berücksichtigt die Querneigung (Steilkurven). Neben der Fahrbahn: Höhe der nächsten Kante."""
+        i, rest = self.segment_at(dist)
+        t = rest / self.seg_len[i]
+        y = self.center_y[i] * (1 - t) + self.center_y[i + 1] * t
+        tilt = self.center_tilt[i] * (1 - t) + self.center_tilt[i + 1] * t
+        half = (self.center_width[i] * (1 - t) + self.center_width[i + 1] * t) / 2
+        return float(y + tilt * max(-half, min(half, lateral)))
+
+    def height_at(self, dist):
+        """Höhe der Mittellinie (auch über Lücken, dort zwischen Absprung und Landung)."""
+        i, rest = self.segment_at(dist)
+        t = rest / self.seg_len[i]
+        return float(self.center_y[i] * (1 - t) + self.center_y[i + 1] * t)

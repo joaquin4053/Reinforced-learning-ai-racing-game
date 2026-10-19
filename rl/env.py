@@ -23,7 +23,8 @@ from game.track import Track
 ROOT = Path(__file__).resolve().parent.parent
 REWARD_CONFIG = ROOT / "reward_config.toml"
 
-END_TEXT = {"finished": "Ziel", "stuck": "Stillstand", "wrong_way": "Falsche Richtung", "time_limit": "Zeitlimit"}
+END_TEXT = {"finished": "Ziel", "fell": "Runtergefallen", "stuck": "Stillstand", "wrong_way": "Falsche Richtung",
+            "time_limit": "Zeitlimit"}
 
 
 def load_reward_config(path=REWARD_CONFIG):

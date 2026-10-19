@@ -172,3 +172,6 @@ eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur f
 .venv/bin/python watch.py test1 --gegen-mich     # gegen deine Bestzeit als Geist
 ```
 R = nochmal, C = Kamera, V = Sensorstrahlen, Esc = Beenden. Läuft auch, während das Training weiterläuft.
+
+## Credits
+Automodell: "2020 NASCAR Chevrolet Camaro Zl1 1LE" von Ddiaz Design, CC-BY-4.0. Details in [CREDITS.md](CREDITS.md).

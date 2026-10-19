@@ -3,12 +3,12 @@
 Eine Geist-Datei:
 {
   "meta": {
-    "format": 1, "physics_version": 6, "rules_version": 1, "track_version": 2, "sensor_version": 1,
-    "map": "map01", "source": "player" | "ai", "attempt": 200 (nur KI), "driver": "Autopilot",
-    "result": "finished" | "crashed", "end_reason": "wall" | ..., "finish_time": 41.23,
+    "format": 2, "physics_version": 7, "rules_version": 3, "track_version": 1, "sensor_version": 3,
+    "map": "poly01", "source": "player" | "ai", "attempt": 200 (nur KI), "driver": "Autopilot",
+    "result": "finished" | "crashed", "end_reason": "fell" | ..., "finish_time": 41.23,
     "progress_pct": 63.5, "wall_hits": 3, "splits": [9.8, 18.2, ...], "dt": 0.01667, "created": "2026-10-13 18:00:00"
   },
-  "frames": [[x, z, heading], ...]   eine Zeile pro Physik-Schritt
+  "frames": [[x, y, z, heading, pitch, roll], ...]   eine Zeile pro Physik-Schritt (Format 2, 3D)
 }
 """
 import json
@@ -22,7 +22,7 @@ from .sim import END_REASONS, PHYSICS_VERSION, RULES_VERSION, SENSOR_VERSION
 GHOST_DIR = Path("ghosts")
 TRACK_DIR = Path("tracks")
 RECORDS_FILE = Path("saves/bestzeiten.json")
-FORMAT = 1
+FORMAT = 2
 
 
 def save_ghost(sim, source, attempt=None, driver=None, folder=GHOST_DIR):
@@ -50,7 +50,8 @@ def save_ghost(sim, source, attempt=None, driver=None, folder=GHOST_DIR):
         "dt": DT,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    frames = [[round(x, 3), round(z, 3), round(h, 4)] for x, z, h in sim.history]
+    frames = [[round(x, 3), round(y, 3), round(z, 3), round(h, 4), round(p, 4), round(r, 4)]
+              for x, y, z, h, p, r in sim.history]
     if source == "ai" and attempt is not None:
         name = f"{sim.track.id}_ai_{attempt:06d}.json"
     else:
@@ -95,14 +96,14 @@ class Ghost:
         return len(self.frames) - 1
 
     def state_at(self, frame):
-        """(x, z, heading) im Physik-Schritt `frame`. Nach dem Ende bleibt der Geist stehen."""
+        """(x, y, z, heading, pitch, roll) im Physik-Schritt `frame`. Nach dem Ende bleibt der Geist stehen."""
         return self.frames[max(0, min(frame, self.last_frame))]
 
     def speed_at(self, frame):
         """Tempo in m/s, aus zwei aufeinanderfolgenden Positionen berechnet."""
         f = max(1, min(frame, self.last_frame))
-        (x0, z0, _), (x1, z1, _) = self.frames[f - 1], self.frames[f]
-        return math.hypot(x1 - x0, z1 - z0) / self.meta["dt"]
+        a, b = self.frames[f - 1], self.frames[f]
+        return math.hypot(b[0] - a[0], b[2] - a[2]) / self.meta["dt"]
 
     def split(self, index):
         """Zeit am Checkpoint `index` (0 = erster), oder None wenn nie erreicht."""

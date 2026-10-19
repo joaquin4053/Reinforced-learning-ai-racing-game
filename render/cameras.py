@@ -1,121 +1,80 @@
-"""Kamera-Modi: Verfolger, Cockpit, Vogelperspektive und automatische Kinokamera.
+"""Kameras (Spiel v2, 3D): Verfolger, Cockpit, Vogel. Taste C wechselt.
 
-Die Kinokamera schneidet alle paar Sekunden zwischen verschiedenen Einstellungen
-(wie bei einer TV-Übertragung). Deterministisch über `seed`, damit Videos reproduzierbar sind.
+Verfolger (Notizen: docs/beobachtung_polytrack.md):
+- hinter dem Auto, leicht erhöht, folgt weich auch in der Höhe,
+- blickt zwischen Nase und Fahrtrichtung -> beim Driften sieht man das Auto schräg,
+- neigt sich mit der Fahrbahn (Steilkurven).
 """
 import math
-import random
 
-from ursina import Vec3, camera, lerp
+from ursina import Vec3, camera
 
-MODES = ["chase", "cinematic", "cockpit", "top"]
+MODES = ("chase", "cockpit", "top")
+MOVE_BLEND = 0.55      # 0 = Kamera schaut wie die Nase, 1 = wie die Fahrtrichtung
+ROLL_FOLLOW = 0.7      # so viel der Querneigung macht die Kamera mit
+SHAKE = 0.05           # m Vibrieren der Kamera bei Spitzentempo (nur Anzeige)
 
 
 def _smooth(dt, speed):
-    return 1 - math.exp(-speed * dt)
+    return 1.0 - math.exp(-speed * dt)
 
 
-def _look_at(target):
-    """Wie camera.look_at, aber ohne Roll (Ursinas look_at kippt die Kamera mit der Zeit)."""
-    d = target - camera.position
-    camera.rotation = Vec3(math.degrees(math.atan2(-d.y, math.hypot(d.x, d.z))),
-                           math.degrees(math.atan2(d.x, d.z)), 0)
+def _angle_lerp(a, b, t):
+    return a + ((b - a + math.pi) % (2 * math.pi) - math.pi) * t
 
 
 class CameraRig:
-    def __init__(self, track, mode="chase", seed=0):
+    def __init__(self, track, mode="chase"):
         self.track = track
         self.mode = mode
-        self.rng = random.Random(seed)
-        self.shot = None
-        self.shot_time = 0.0
-        self.shot_len = 0.0
-        self.tv_pos = None
-        self.orbit = 0.0
         self.first = True
-        self.last_shot = None
+        self.pos = Vec3(0, 0, 0)
+        self.look = Vec3(0, 0, 0)
+        self.yaw = 0.0
+        self.roll = 0.0
+        self.t = 0.0
 
     def next_mode(self):
         self.mode = MODES[(MODES.index(self.mode) + 1) % len(MODES)]
         self.first = True
-        self.shot = None
-        return self.mode
 
-    def update(self, x, z, heading, speed, progress, dt):
-        fwd = Vec3(math.sin(heading), 0, math.cos(heading))
-        right = Vec3(math.cos(heading), 0, -math.sin(heading))
-        car = Vec3(x, 0, z)
-        getattr(self, "_" + self.mode)(car, fwd, right, speed, progress, dt)
-        self.first = False
-
-    # ---------- einfache Modi ----------
-    def _follow(self, pos, look, dt, stiff=7.0, fov=None):
+    def update(self, x, y, z, heading, speed, dt, roll=0.0, move_heading=None):
+        car = Vec3(x, y, z)
+        target_yaw = heading
+        if move_heading is not None and speed > 8:
+            target_yaw = _angle_lerp(heading, move_heading, MOVE_BLEND)
         if self.first:
-            camera.position = pos
+            self.yaw, self.roll = target_yaw, roll
+        self.yaw = _angle_lerp(self.yaw, target_yaw, _smooth(dt, 6.0))
+        fx, fz = math.sin(self.yaw), math.cos(self.yaw)
+        tilt = 0.0
+        if self.mode == "chase":
+            v = min(max(speed, 0), 110)
+            back = 6.2 + v * 0.012                                  # tief und nah: Boden rast vorbei
+            want_pos = car + Vec3(-fx * back, 2.1, -fz * back)
+            want_look = car + Vec3(fx * 10, 0.9, fz * 10)
+            stiff, fov = 10.0, 62 + v * 0.30                        # Blickwinkel weitet sich stark mit dem Tempo
+            tilt = roll * ROLL_FOLLOW
+        elif self.mode == "cockpit":
+            hx, hz = math.sin(heading), math.cos(heading)
+            want_pos = car + Vec3(hx * 0.3, 1.35, hz * 0.3)
+            want_look = car + Vec3(hx * 20, 1.0, hz * 20)
+            stiff, fov = 40.0, 85
+            tilt = roll
         else:
-            camera.position = lerp(camera.position, pos, _smooth(dt, stiff))
-        _look_at(look)
-        if fov is not None:
-            camera.fov = lerp(camera.fov, fov, _smooth(dt, 3.0)) if not self.first else fov
-
-    def _chase(self, car, fwd, right, speed, progress, dt):
-        fov = 70 + min(abs(speed), 50) * 0.35  # bei Speed etwas mehr Sichtfeld
-        self._follow(car - fwd * 10 + Vec3(0, 4, 0), car + fwd * 6 + Vec3(0, 1, 0), dt, fov=fov)
-
-    def _cockpit(self, car, fwd, right, speed, progress, dt):
-        camera.position = car + fwd * 0.3 + Vec3(0, 1.35, 0)
-        _look_at(camera.position + fwd * 10 + Vec3(0, -0.6, 0))
-        camera.fov = 85
-
-    def _top(self, car, fwd, right, speed, progress, dt):
-        self._follow(car + Vec3(0, 70, -0.01) - fwd * 25, car + fwd * 10, dt, stiff=4, fov=60)
-
-    # ---------- Kinokamera ----------
-    SHOTS = {  # Name: (min, max) Dauer in Sekunden
-        "low_chase": (3.5, 5.0),
-        "drone": (4.0, 6.0),
-        "tv": (3.0, 5.0),
-        "front": (2.0, 3.0),
-        "heli": (3.5, 5.0),
-    }
-
-    def _pick_shot(self, car, fwd, progress):
-        options = [s for s in self.SHOTS if s != self.last_shot]
-        shot = self.rng.choice(options) if self.last_shot else "low_chase"  # Start immer von hinten
-        self.shot, self.last_shot = shot, shot
-        self.shot_time = 0.0
-        self.shot_len = self.rng.uniform(*self.SHOTS[shot])
-        self.first = True
-        self.orbit = self.rng.uniform(0, 360)
-        self.orbit_dir = self.rng.choice((-1, 1))
-        if shot == "tv":
-            # Kamera am Streckenrand ~70 m voraus aufstellen
-            p, t = self.track.point_at(progress + 70)
-            side = self.rng.choice((-1, 1))
-            n = Vec3(t[1], 0, -t[0]) * side
-            self.tv_pos = Vec3(p[0], 0, p[1]) + n * (self.track.width / 2 + 8) + Vec3(0, 5, 0)
-
-    def _cinematic(self, car, fwd, right, speed, progress, dt):
-        if self.shot is None or self.shot_time > self.shot_len:
-            self._pick_shot(car, fwd, progress)
-        self.shot_time += dt
-        up = Vec3(0, 1, 0)
-        s = self.shot
-        if s == "low_chase":
-            self._follow(car - fwd * 6.5 + right * 1.5 + up * 1.1, car + fwd * 8 + up * 0.8, dt, stiff=10, fov=80)
-        elif s == "drone":
-            self.orbit += self.orbit_dir * 25 * dt
-            a = math.radians(self.orbit)
-            pos = car + Vec3(math.sin(a) * 16, 9, math.cos(a) * 16)
-            self._follow(pos, car + up, dt, stiff=5, fov=55)
-        elif s == "tv":
-            camera.position = self.tv_pos
-            _look_at(car + up)
-            dist = (car - self.tv_pos).length()
-            camera.fov = max(12, min(65, math.degrees(2 * math.atan(9 / max(dist, 1)))))  # Tele-Zoom
-            if dist > 45 and self.shot_time > 1.5 and (car - self.tv_pos).dot(fwd) > 0:
-                self.shot_time = self.shot_len + 1  # Auto ist vorbei -> Schnitt
-        elif s == "front":
-            self._follow(car + fwd * 9 + right * 1.0 + up * 1.8, car + up * 0.8, dt, stiff=14, fov=60)
-        elif s == "heli":
-            self._follow(car - fwd * 22 + right * 8 + up * 20, car + fwd * 12, dt, stiff=3, fov=50)
+            want_pos = car + Vec3(-fx * 4, 80, -fz * 4)
+            want_look = car + Vec3(fx * 6, 0, fz * 6)
+            stiff, fov = 5.0, 60
+        if self.first:
+            self.pos, self.look = want_pos, want_look
+            self.first = False
+        self.pos += (want_pos - self.pos) * _smooth(dt, stiff)
+        self.look += (want_look - self.look) * _smooth(dt, stiff * 1.6)
+        self.roll += (tilt - self.roll) * _smooth(dt, 5.0)
+        self.t += dt
+        shake = max(0.0, speed - 40) / 70 * SHAKE if self.mode == "chase" else 0.0   # leichtes Vibrieren
+        wobble = Vec3(math.sin(self.t * 37.0), math.sin(self.t * 43.0 + 1.3), 0) * shake
+        camera.position = self.pos + wobble
+        camera.look_at(self.look)
+        camera.rotation_z = math.degrees(self.roll)     # gleiche Richtung wie das Auto (geprüft im Bild)
+        camera.fov += (fov - camera.fov) * _smooth(dt, 3.0)

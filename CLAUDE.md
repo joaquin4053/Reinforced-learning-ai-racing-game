@@ -6,15 +6,17 @@ Die KI soll lernen, die Strecke regelkonform in möglichst kurzer Zeit vom Start
 ## REGELN (strikt)
 R1 Gültige Runde: Eine Runde ist nur gültig, wenn das Auto stehend an der Startposition beginnt, alle Checkpoints in der festgelegten Reihenfolge durchfährt und danach die Ziellinie überquert. Nur gültige Runden erhalten eine Zeit.
 
-R2 Auf der Strecke bleiben: Berührt das Auto die Streckenbegrenzung, prallt es ab, verliert Tempo und die Fahrt geht weiter. Jede Berührung wird von der Simulation gemeldet. Die Fahrbahn kann nicht verlassen werden. Abkürzungen sind nicht möglich und wären ungültig. Diese Regel gilt für KI und Spieler gleich.
+R2 Auf der Strecke bleiben: Die Strecke schwebt frei, ohne Wände. Fällt das Auto von der Fahrbahn (mehr als 4 m unter die Strecke), ist das ein Crash: Die Fahrt endet, es gibt keine Rundenzeit und die Crash-Strafe nach R7. Prallt das Auto gegen die Seite eines Blocks, prallt es ab, verliert Tempo und die Fahrt geht weiter; jede Berührung wird von der Simulation gemeldet. Abkürzungen sind ungültig (Checkpoints nur in der festgelegten Reihenfolge, R1). Diese Regel gilt für KI und Spieler gleich.
 *(Geändert am 2026-10-13 mit Zustimmung: vorher "Berührung = Crash, Fahrt endet sofort".)*
+*(Geändert am 2026-10-18 mit Zustimmung: Spiel v2 in 3D ohne Wände, Runterfallen = Crash.)*
 
 R3 Gleiche Physik, gleiches Auto: KI und Spieler nutzen exakt dasselbe Physik-Modul mit denselben Parametern und demselben festen Zeitschritt. Die KI hat keine Sonderrechte: kein höheres Tempo, keine andere Haftung, kein Zurücksetzen während der Fahrt.
 
 R4 Gleiche Eingaben: Aktionen sind nur im erlaubten Bereich möglich: Lenkung -1 bis 1, Gas 0 bis 1, Bremse 0 bis 1, Drift 0 bis 1. Werte ausserhalb werden abgeschnitten. Höchstens eine Entscheidung pro Physik-Schritt.
 *(Geändert am 2026-10-13 mit Zustimmung: Drift als vierte Eingabe für Spieler und KI ergänzt.)*
 
-R5 Nur Fahrersicht: Die KI bekommt nur Informationen, die ein Fahrer im Auto wahrnehmen könnte: Abstände der Sensorstrahlen zur Streckenbegrenzung, eigenes Tempo, Winkel zur Streckenrichtung. Keine absoluten Koordinaten, keine Ideallinie, kein Wissen über die Strecke hinter der Sensorreichweite.
+R5 Nur Fahrersicht: Die KI bekommt nur Informationen, die ein Fahrer im Auto wahrnehmen könnte: Abstände der Sensorstrahlen zur Streckenbegrenzung (Streckenkante), eigenes Tempo, Winkel zur Streckenrichtung, Neigung des Autos (Steigung), ob das Auto in der Luft ist und das senkrechte Tempo. Keine absoluten Koordinaten, keine Ideallinie, kein Wissen über die Strecke hinter der Sensorreichweite (100 m).
+*(Ergänzt am 2026-10-18 mit Zustimmung: Steigung, in der Luft, senkrechtes Tempo für Spiel v2 in 3D. Reichweite bleibt 100 m.)*
 
 R6 Zeitmessung: Zeit = Anzahl Physik-Schritte × Zeitschritt, angezeigt auf 0.01 s. Nie mit der echten Uhr messen. Offizielle Bestzeiten der KI zählen nur aus deterministischen Fahrten (ohne Zufall).
 
@@ -44,29 +46,32 @@ R11 Fahrt-Ende ohne Ziel: Eine Fahrt endet vorzeitig als Crash, wenn (a) das Aut
 6. Zuschauer mit Zeitliste wie bei einem Videoplayer
 7. Geister (viele Versuche gleichzeitig)
 
-## BEOBACHTUNG DER KI (Sensor-Version 2)
+## BEOBACHTUNG DER KI (Sensor-Version 5)
 Was `observation()` liefert, in genau dieser Reihenfolge. Erzeugt aus `game/sensors.py`; `check_ready.py` prüft, dass diese Tabelle zum Code passt.
 
 | Index | Name | Bedeutung | Wertebereich |
 |---|---|---|---|
-| 0 | `strahl_0` | Abstand zur Wand, Strahl 90.0° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 1 | `strahl_1` | Abstand zur Wand, Strahl 78.8° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 2 | `strahl_2` | Abstand zur Wand, Strahl 67.5° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 3 | `strahl_3` | Abstand zur Wand, Strahl 56.2° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 4 | `strahl_4` | Abstand zur Wand, Strahl 45.0° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 5 | `strahl_5` | Abstand zur Wand, Strahl 33.8° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 6 | `strahl_6` | Abstand zur Wand, Strahl 22.5° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 7 | `strahl_7` | Abstand zur Wand, Strahl 11.2° links (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 8 | `strahl_8` | Abstand zur Wand, Strahl 0.0° geradeaus (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 9 | `strahl_9` | Abstand zur Wand, Strahl 11.2° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 10 | `strahl_10` | Abstand zur Wand, Strahl 22.5° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 11 | `strahl_11` | Abstand zur Wand, Strahl 33.8° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 12 | `strahl_12` | Abstand zur Wand, Strahl 45.0° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 13 | `strahl_13` | Abstand zur Wand, Strahl 56.2° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 14 | `strahl_14` | Abstand zur Wand, Strahl 67.5° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 15 | `strahl_15` | Abstand zur Wand, Strahl 78.8° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 16 | `strahl_16` | Abstand zur Wand, Strahl 90.0° rechts (0 = direkt an der Wand, 1 = nichts in 100 m) | 0 bis 1 |
-| 17 | `tempo` | Tempo vorwärts / 60 m/s (negativ = rückwärts) | -1 bis 1 |
+| 0 | `strahl_0` | Abstand zur Streckenkante, Strahl 90.0° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 1 | `strahl_1` | Abstand zur Streckenkante, Strahl 78.8° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 2 | `strahl_2` | Abstand zur Streckenkante, Strahl 67.5° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 3 | `strahl_3` | Abstand zur Streckenkante, Strahl 56.2° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 4 | `strahl_4` | Abstand zur Streckenkante, Strahl 45.0° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 5 | `strahl_5` | Abstand zur Streckenkante, Strahl 33.8° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 6 | `strahl_6` | Abstand zur Streckenkante, Strahl 22.5° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 7 | `strahl_7` | Abstand zur Streckenkante, Strahl 11.2° links (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 8 | `strahl_8` | Abstand zur Streckenkante, Strahl 0.0° geradeaus (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 9 | `strahl_9` | Abstand zur Streckenkante, Strahl 11.2° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 10 | `strahl_10` | Abstand zur Streckenkante, Strahl 22.5° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 11 | `strahl_11` | Abstand zur Streckenkante, Strahl 33.8° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 12 | `strahl_12` | Abstand zur Streckenkante, Strahl 45.0° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 13 | `strahl_13` | Abstand zur Streckenkante, Strahl 56.2° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 14 | `strahl_14` | Abstand zur Streckenkante, Strahl 67.5° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 15 | `strahl_15` | Abstand zur Streckenkante, Strahl 78.8° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 16 | `strahl_16` | Abstand zur Streckenkante, Strahl 90.0° rechts (0 = direkt an der Kante, 1 = nichts in 100 m) | 0 bis 1 |
+| 17 | `tempo` | Tempo vorwärts / 110 m/s (negativ = rückwärts) | -1 bis 1 |
 | 18 | `winkel_strecke` | Winkel zwischen Fahrtrichtung und Streckenrichtung / 180° (positiv = Auto zeigt nach rechts) | -1 bis 1 |
-| 19 | `rutschen` | Tempo seitwärts / 60 m/s (positiv = rutscht nach rechts) | -1 bis 1 |
+| 19 | `rutschen` | Tempo seitwärts / 110 m/s (positiv = rutscht nach rechts) | -1 bis 1 |
 | 20 | `lenkung` | aktuelle Lenkradstellung (-1 = voll links, +1 = voll rechts) | -1 bis 1 |
+| 21 | `steigung` | Neigung des Autos nach vorne / 45° (positiv = bergauf) | -1 bis 1 |
+| 22 | `in_der_luft` | 1 = Räder haben keinen Bodenkontakt, 0 = am Boden | 0 bis 1 |
+| 23 | `tempo_vertikal` | Tempo nach oben / 30 m/s (negativ = fällt) | -1 bis 1 |

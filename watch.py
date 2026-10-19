@@ -12,6 +12,7 @@ Die KI sieht nur ihre Beobachtung (R5) und fährt mit derselben Simulation wie d
 """
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -69,13 +70,15 @@ if state_file and state_file.exists():
     state = json.loads(state_file.read_text())
 
 import render  # noqa: E402  GL-Setup für macOS, muss vor Ursina() geladen sein
-from ursina import Ursina, application, time, window  # noqa: E402
+from ursina import Ursina, application, camera, time, window  # noqa: E402
 
 from game.car import DT  # noqa: E402
 from game.ghost import Ghost, best_time  # noqa: E402
 from render.cameras import CameraRig  # noqa: E402
+from render.effects import DriftEffects, SpeedStreaks  # noqa: E402
 from render.minimap import Minimap  # noqa: E402
-from render.world import HUD, GhostCar, World, format_time, lerp_pose  # noqa: E402
+from render.hud import HUD, format_time  # noqa: E402
+from render.world import GhostCar, World, lerp_pose  # noqa: E402
 
 sim, track = env.sim, env.track
 model_label = Path(model_path).resolve().relative_to(ROOT) if Path(model_path).resolve().is_relative_to(ROOT) \
@@ -87,6 +90,8 @@ window.exit_button.visible = False
 world = World(track)
 hud = HUD(label=f"KI · {args.name}")
 rig = CameraRig(track, mode="chase")
+effects = DriftEffects()
+streaks = SpeedStreaks()
 
 ghost_files = list(args.ghost)
 mine = best_time(track.id)
@@ -113,7 +118,7 @@ def load_live():
 
 def pose():
     c = sim.car
-    return (c.x, c.z, c.heading, c.steer)
+    return (c.x, c.y, c.z, c.heading, c.pitch, c.roll, c.steer)
 
 
 def restart():
@@ -158,12 +163,16 @@ def update():
                 on_end(info)
 
     alpha = st["acc"] / DT if not sim.done and st["wait"] <= 0 else 1.0
-    x, z, heading, steer = lerp_pose(st["prev"], pose(), alpha)
+    x, y, z, heading, pitch, roll, steer = lerp_pose(st["prev"], pose(), alpha)
     vf, _ = sim.car.local_velocity()
-    world.car.set_state(x, z, heading, steer)
+    world.car.set_state(x, y, z, heading, pitch, roll, steer)
     if world.rays.enabled:
-        world.rays.set_state(x, z, heading)
-    rig.update(x, z, heading, vf, sim.progress, time.dt)
+        world.rays.set_state(x, y, z, heading)
+    c = sim.car
+    rig.update(x, y, z, heading, vf, time.dt, roll=roll, move_heading=math.atan2(c.vx, c.vz))
+    world.follow(x, y, z)
+    effects.update(c, time.dt)
+    streaks.update(c, camera.world_position, time.dt)
     for g in ghosts:
         g.show_frame(sim.frame - 1 + alpha)
     minimap.update(x, z, heading, [(g.model.x, g.model.z) for g in ghosts])
@@ -185,6 +194,9 @@ def update():
     lines.append(f"Wandberührungen: {sim.wall_hits}")
     lines.append(f"Kamera: {rig.mode} [C]   Sensoren [V]   Nochmal [R]")
     hud.set(vf, sim.time, "\n".join(lines), st["message"])
+    n_cp = len(track.checkpoints)
+    best = (live or state or {}).get("bestzeit")
+    hud.set_bar(f"{min(len(sim.splits), n_cp)}/{n_cp}", format_time(best) if best is not None else "–")
     if st["message"]:
         hud.big.set(st["message"], HUD.YELLOW)
 
