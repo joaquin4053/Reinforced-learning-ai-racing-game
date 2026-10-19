@@ -10,6 +10,8 @@ episodes/versuch_0000123.npz   ein Versuch (komprimiert), lesen mit load_episode
   Die Position ist float32, alles andere float16: Die Strecken sind über 1 km gross, float16 hätte dort
   nur noch 1 m Auflösung (das Auto würde in der Wiedergabe springen).
 
+torch wird erst beim Speichern/Laden eines Snapshots geladen (viewer.py braucht es nicht).
+
 models/versuch_0000120.pt      Gewichte von Actor und Critic (ohne Replay-Buffer, Optimizer, Ziel-Netze),
                                lesen mit load_snapshot()
 """
@@ -18,7 +20,6 @@ import json
 import zipfile
 
 import numpy as np
-import torch
 
 from game import sensors
 
@@ -91,6 +92,7 @@ def snapshot_name(attempt):
 
 def save_snapshot(folder, attempt, model, meta):
     """Nur Actor und Critic. Genug für Netz-Grafik, Critic-Kurve und Geister, nicht zum Weitertrainieren."""
+    import torch
     folder.mkdir(exist_ok=True)
     pol = model.policy
     data = {"format": SNAPSHOT_FORMAT,
@@ -109,6 +111,7 @@ def save_snapshot(folder, attempt, model, meta):
 def load_snapshot(path):
     """-> (policy, meta). policy.predict(obs, deterministic=True) fährt wie das Modell zum Zeitpunkt des Snapshots."""
     import gymnasium as gym
+    import torch
     from stable_baselines3.sac.policies import SACPolicy
 
     data = torch.load(path, map_location="cpu", weights_only=True)

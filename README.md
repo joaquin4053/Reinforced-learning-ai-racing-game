@@ -22,7 +22,8 @@ python3 -m venv .venv
 | `.venv/bin/python check_ready.py` | Prüft, ob die Simulation regelkonform und bereit fürs Training ist (OK/FEHLER je Prüfung) |
 | `.venv/bin/python -m pytest` | Automatische Tests (u.a. Determinismus) |
 | `.venv/bin/python train.py --name test1` | KI trainieren (siehe [Training](#training)) |
-| `.venv/bin/python watch.py test1` | Der KI beim Fahren zuschauen |
+| `.venv/bin/python watch.py test1 --live` | Der KI beim Fahren zuschauen (Netz fährt jetzt) |
+| `.venv/bin/python viewer.py test1` | Aufgezeichnete Versuche ansehen wie im Videoplayer |
 
 **Steuerung:** W/S oder Pfeile = Gas/Bremse, A/D = Lenken (leicht geglättet), Leertaste = Drift, R/Backspace = Neustart,
 C = Kamera, V = KI-Sensoren, Tab/F3 = Debug-Anzeige, Esc = Beenden.
@@ -181,15 +182,35 @@ gerade läuft, fasst es nicht an.
 **Offizielle Zeiten** (R6) kommen nur aus der **Auswertung**: Alle 25'000 Schritte fährt das aktuelle Modell
 eine Runde ohne Zufall. Runden während des Trainings (mit Zufall) zählen nur für Stufe 1.
 
-### Zuschauen
+### Zuschauen wie im Videoplayer (`viewer.py`)
 ```bash
-.venv/bin/python watch.py test1 --live           # LIVE: nach jeder Runde der neueste Stand des Trainings
-.venv/bin/python watch.py test1                  # Modell der offiziellen Bestzeit
-.venv/bin/python watch.py test1 --modell neuester # jüngstes Modell (Version alle 25'000 Schritte)
-.venv/bin/python watch.py test1 --modell letzter # letzter Fortsetzungspunkt
-.venv/bin/python watch.py test1 --gegen-mich     # gegen deine Bestzeit als Geist
+.venv/bin/python viewer.py                        # neuester Lauf, live
+.venv/bin/python viewer.py v2_lauf2               # bestimmter Lauf
+.venv/bin/python viewer.py v2_lauf2 --versuch 500 --filter gueltige --tempo 5
 ```
-R = nochmal, C = Kamera, V = Sensorstrahlen, Esc = Beenden. Läuft auch, während das Training weiterläuft.
+Spielt die aufgezeichneten Versuche aus `episodes/` ab (genau das, was gefahren wurde). Läuft während oder
+nach dem Training, liest nur Dateien und läuft mit niedriger Priorität (nice 15), damit das Training Vorrang hat.
+
+- **Oben:** Info-Zeile mit Versuch, Art (Training mit Zufall / Auswertung ohne Zufall), Reward, Ergebnis.
+- **Unten:** Zeitleiste aller Versuche (Höhe = Fortschritt; grün = Ziel, gelb = Ziel in der Auswertung,
+  rot = Crash, grau = Zeitlimit). Ziehen = spulen, Klick = zu diesem Versuch. Darunter die aktuelle Fahrt
+  (Tempo-Verlauf), darunter die Knöpfe: zurück, Play/Pause, weiter, Tempo (0.5× bis 50×), LIVE, Filter, Kamera, Panel.
+- **Rechts:** Panel (P), wird in Schritt 8 und 9 zum Dashboard.
+- **LIVE:** springt zum neuesten Versuch und folgt dem Training. Neue Versuche erscheinen von selbst.
+- Alle Tastenkürzel: `?` (oder H).
+
+### Zuschauen, wie das Netz jetzt fährt (`watch.py`)
+Gleiche Oberfläche und gleiche Tasten wie `viewer.py`. Statt eine Aufzeichnung abzuspielen, fährt eine gespeicherte
+Version des Netzes jetzt, deterministisch (R6) – genau dieselbe Fahrt wie in ihrer Auswertung beim Training.
+```bash
+.venv/bin/python watch.py v2_lauf2 --live              # immer die neueste Version, folgt dem Training
+.venv/bin/python watch.py v2_lauf2                     # Version der offiziellen Bestzeit
+.venv/bin/python watch.py v2_lauf2 --modell neuester   # jüngste Version (ohne zu folgen)
+.venv/bin/python watch.py v2_lauf2 --modell letzter    # letzter Fortsetzungspunkt
+.venv/bin/python watch.py v2_lauf2 --gegen-mich        # gegen deine Bestzeit als Geist
+```
+Obere Zeitleiste = Versionen (eine pro Auswertung, alle 25'000 Schritte), untere = die Fahrt. Was schon gefahren
+ist, lässt sich zurückspulen; vorspulen rechnet voraus. `--gegen-mich` gibt es auch bei `viewer.py`.
 
 ## Credits
 Automodell: "2020 NASCAR Chevrolet Camaro Zl1 1LE" von Ddiaz Design, CC-BY-4.0. Details in [CREDITS.md](CREDITS.md).

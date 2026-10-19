@@ -90,13 +90,19 @@ class Minimap:
         # Auto: Pfeil, zeigt immer nach oben (die Karte dreht sich drumherum)
         add(self.frame, _shape([(0, 16), (-10, -11), (0, -5), (10, -11)]), CAR, 6, y=car_y, scale=self.k)
         self._aspect = None
+        self.right = None             # rechter Rand in UI-Einheiten (None = Fensterrand); viewer.py setzt ihn
+        self.top = 0.5
+        self._placed = None
 
     def _place(self):
-        """Oben rechts in die Ecke setzen (neu, falls sich das Seitenverhältnis des Fensters ändert)."""
-        if window.aspect_ratio == self._aspect:
+        """Oben rechts in die Ecke setzen (neu, falls sich Fenster oder Ränder ändern)."""
+        key = (window.aspect_ratio, self.right, self.top)
+        if key == self._placed:
             return
+        self._placed = key
         self._aspect = window.aspect_ratio
-        self.frame.position = Vec3(self._aspect / 2 - MARGIN - SIZE / 2, 0.5 - MARGIN - SIZE / 2, 0)
+        right = self._aspect / 2 if self.right is None else self.right
+        self.frame.position = Vec3(right - MARGIN - SIZE / 2, self.top - MARGIN - SIZE / 2, 0)
 
     def update(self, x, z, heading, ghost_positions=()):
         self._place()

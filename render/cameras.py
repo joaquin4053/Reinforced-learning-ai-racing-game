@@ -78,3 +78,37 @@ class CameraRig:
         camera.look_at(self.look)
         camera.rotation_z = math.degrees(self.roll)     # gleiche Richtung wie das Auto (geprüft im Bild)
         camera.fov += (fov - camera.fov) * _smooth(dt, 3.0)
+
+
+class FreeCamera:
+    """Frei fliegende Kamera (viewer.py): Maus ziehen = umsehen, W/A/S/D = fliegen, Q/E = runter/hoch,
+    Shift = schneller, Mausrad = Fluggeschwindigkeit."""
+
+    def __init__(self):
+        self.yaw = self.pitch = 0.0
+        self.speed = 40.0          # m/s
+
+    def start(self):
+        """Dort weitermachen, wo die Kamera gerade ist."""
+        f = camera.forward
+        self.yaw = math.atan2(f.x, f.z)
+        self.pitch = math.asin(max(-1.0, min(1.0, f.y)))
+        camera.rotation_z = 0
+
+    def look(self, dx, dy):
+        self.yaw += dx * 3.0
+        self.pitch = max(-1.45, min(1.45, self.pitch + dy * 3.0))
+
+    def zoom(self, steps):
+        self.speed = max(5.0, min(400.0, self.speed * (1.25 ** steps)))
+
+    def update(self, dt, held):
+        cp = math.cos(self.pitch)
+        fwd = Vec3(math.sin(self.yaw) * cp, math.sin(self.pitch), math.cos(self.yaw) * cp)
+        right = Vec3(math.cos(self.yaw), 0, -math.sin(self.yaw))
+        move = fwd * (held["w"] - held["s"]) + right * (held["d"] - held["a"]) + Vec3(0, 1, 0) * (held["e"] - held["q"])
+        k = self.speed * (4.0 if held["shift"] else 1.0) * dt
+        camera.position += move * k
+        camera.look_at(camera.position + fwd)
+        camera.rotation_z = 0
+        camera.fov += (70 - camera.fov) * _smooth(dt, 3.0)
