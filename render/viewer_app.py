@@ -16,10 +16,11 @@ from game.car import DT
 from game.sensors import RAY_RANGE
 from game.sim import format_time
 from rl.playback import GHOST_COUNTS, GROUP_MODES, GROUP_TEXT, SPEEDS, read_json
+from rl.stats import training_seconds
 
 FILTER_TEXT = {"alle": "Alle Versuche", "auswertungen": "Nur Auswertungen", "gueltige": "Nur gültige Runden"}
 CAM_MODES = (("chase", "Verfolger"), ("cine", "Drohne"), ("top", "Von oben"), ("free", "Frei"))
-TOP_H, PANEL_W = 0.042, 0.5
+TOP_H, PANEL_W = 0.042, 0.6
 BOTTOM_H = {False: 0.17, True: 0.224}      # mit Geistern: zweite Knopfreihe
 
 
@@ -75,36 +76,39 @@ class Source:
             return text
         return f"{a.ende.upper()}\n{a.fortschritt:.0f} % geschafft"
 
-    def panel(self, index, player, extra=()):
-        recent = index.attempts[-100:]
-        n_eval = sum(a.auswertung for a in index.attempts)
-        lines = [f"Schritte (Training): {nr(index.attempts[-1].schritte)}" if index.attempts else "Schritte: –",
-                 f"Versuche: {nr(len(index.attempts))}  (Auswertungen {nr(n_eval)})"]
-        lines += self.records()
-        lines.append(f"Im Ziel (letzte 100): {sum(a.gueltig for a in recent)} %" if len(recent) == 100 else
-                     f"Im Ziel: {sum(a.gueltig for a in recent)} von {len(recent)}")
+    # ---------- Dashboard (Plan-Schritt 8) ----------
+    def shown(self, player, extra=()):
+        """Karte "Gezeigt": was gerade läuft, Geister, Versionen."""
         a = player.current
-        if a is not None:
-            lines += ["", f"Dieser Versuch: {nr(a.versuch)}", f"   gefahren bei Schritt {nr(a.schritte)}"]
-        return lines + list(extra) + self.footer(player)
-
-    def records(self):
-        rec = read_json(self.run_dir / "rekorde.json")
-        best = rec.get("bestzeit")
-        stage = max((int(k) for k in rec.get("stufen", {})), default=0)
-        return [f"Offizielle Bestzeit: {format_time(best) if best else '–'}", f"Erfolgsstufe: {stage}",
-                f"Deine Bestzeit: {format_time(self.mine['time'])}" if self.mine else "Deine Bestzeit: –"]
+        lines = [f"Versuch {nr(a.versuch)}  ·  gefahren bei Schritt {nr(a.schritte)}"] if a else ["–"]
+        return lines + [x for x in extra if x] + self.footer(player)
 
     def footer(self, player):
         v = self.cfg.get("versionen", {})
-        lines = ["", f"Strecke: {self.track.name}", f"Physik v{v.get('physik')}, Regeln v{v.get('regeln')},",
-                 f"Sensoren v{v.get('sensoren')}, Reward v{v.get('reward')}"]
+        lines = [f"{self.track.name}  ·  Physik v{v.get('physik')}  Regeln v{v.get('regeln')}  "
+                 f"Sensoren v{v.get('sensoren')}  Reward v{v.get('reward')}"]
         ep = player.episode
         if ep is not None:
             other = [k for k, val in ep.meta.get("versionen", {}).items() if v.get(k) != val]
             if other:
-                lines += ["", f"Achtung: andere Version ({', '.join(other)})", "Zeiten nicht vergleichbar (R8)"]
+                lines += [f"Achtung: andere Version ({', '.join(other)}) – Zeiten nicht vergleichbar (R8)"]
         return lines
+
+    def curve_index(self, player):
+        """Alle Versuche des Laufs für Lernkurve und Rundenzeit."""
+        return player.index
+
+    def focus_attempt(self, player):
+        """Versuchsnummer, die in den Kurven markiert wird."""
+        return player.current.versuch if player.current else None
+
+    def jump(self, player, versuch):
+        """Klick in eine Kurve."""
+        player.select_versuch(versuch)
+
+    def result(self, player):
+        """Ergebnis des gezeigten Versuchs (für die Reward-Aufteilung)."""
+        return player.current.ergebnis if player.current else ""
 
 
 class ViewerApp:
@@ -119,7 +123,8 @@ class ViewerApp:
         from render.ghosts import GhostFleet
         from render.hud import TextQuad
         from render.minimap import Minimap
-        from render.viewer_ui import BAR, Button, Help, InfoBar, InputBox, Panel, Ranking, Strip
+        from render.dashboard import Dashboard
+        from render.viewer_ui import BAR, Button, Help, InfoBar, InputBox, Ranking, Strip
         from render.world import GhostCar, World
 
         self.src, self.player, self.index = source, player, player.index
@@ -163,7 +168,7 @@ class ViewerApp:
                ("rechte Maus ziehen", "Bereich auf der Versuchs-Zeitleiste markieren"),
                ("T", "Nummern über den Geistern ein/aus"),
                ("Klick auf Geist", "Kamera folgt ihm, Info und Dashboard zeigen ihn")] if source.ghosts_enabled else []),
-            ("P", "Panel rechts ein/aus"),
+            ("P", "Dashboard rechts ein/aus (Titel = Karte ein-/ausklappen, ? = Erklärung, Mausrad = scrollen)"),
             ("F", "Vollbild"),
             ("?  /  H", "diese Hilfe"),
             ("Esc", "Beenden"),
@@ -173,7 +178,7 @@ class ViewerApp:
             "info": InfoBar(),
             "attempts": Strip(source.items),
             "ride": Strip("Fahrt"),
-            "panel": Panel(),
+            "panel": Dashboard(),
             "help": Help(self.help_rows),
             "big": TextQuad("", height=0.06, origin=(0, 0), heavy=True, color=(255, 215, 40), align="center"),
             "hover": TextQuad("", height=0.02, origin=(0, -.5), px=40, heavy=True),
@@ -190,7 +195,7 @@ class ViewerApp:
             "live": Button("● LIVE", on_click=p.go_live, tooltip=f"{source.live_text} (L)"),
             "filter": Button("", on_click=self._cycle_filter, tooltip=f"Filter ({keys})"),
             "cam": Button("", on_click=self._cycle_cam, tooltip="Kamera (C)"),
-            "panel": Button("Panel", on_click=self._toggle_panel, tooltip="Panel rechts (P)"),
+            "panel": Button("Dashboard", on_click=self._toggle_panel, tooltip="Dashboard rechts ein/aus (P)"),
             "help": Button("?", on_click=self.ui["help"].toggle, tooltip="Tastenkürzel (?)"),
         }
         if self.with_ghosts:
@@ -280,8 +285,9 @@ class ViewerApp:
         ui["bottom"].position = Vec3(0, -0.5 + bottom_h / 2, 0.03)
         ui["bottom"].scale = Vec3(A, bottom_h, 1)
         ui["panel"].enabled = panel
+        cx = -A / 2 + (right_3d + A / 2) / 2
         if panel:
-            ui["panel"].layout(right_3d, -0.5 + bottom_h, A / 2, 0.5 - TOP_H)
+            ui["panel"].layout(right_3d, -0.5 + bottom_h, A / 2, 0.5 - TOP_H, help_center=(cx, 0.05))
         self.rect_3d = (-A / 2, -0.5 + bottom_h, right_3d, 0.5 - TOP_H)
         self.ranking.layout(-A / 2 + 0.012, 0.5 - TOP_H - 0.012)
         self.minimap.right, self.minimap.top = right_3d, 0.5 - TOP_H
@@ -290,7 +296,7 @@ class ViewerApp:
         ui["attempts"].layout(x_label, x0, yb - 0.052, x1, yb - 0.014, x1 + 0.02)
         ui["ride"].layout(x_label, x0, yb - 0.088, x1, yb - 0.066, x1 + 0.02)
         rows = [(("prev", 0.05), ("play", 0.06), ("next", 0.05), ("speed", 0.08), ("live", 0.11),
-                 ("filter", 0.25), ("cam", 0.24), ("panel", 0.09), ("help", 0.05))]
+                 ("filter", 0.25), ("cam", 0.24), ("panel", 0.14), ("help", 0.05))]
         if self.with_ghosts:
             rows.append((("g_n", 0.17), ("g_mode", 0.3), ("g_range", 0.32), ("g_labels", 0.18)))
         y_top = yb - 0.104
@@ -372,30 +378,60 @@ class ViewerApp:
             strip.set_band(None)
 
     def update_panel(self):
-        self.ui["panel"].set("\n".join(self.src.panel(self.index, self.player, self._ghost_lines())))
+        """Dashboard: neue Daten (ca. 1x pro Sekunde und bei jedem Wechsel)."""
+        if not self.st["panel"]:
+            return
+        src, p = self.src, self.player
+        idx = src.curve_index(p)
+        if idx is not p.index:
+            idx.refresh()
+        att = idx.attempts
+        if len(att) != self.st.get("pos_n"):
+            self.st["pos_n"] = len(att)
+            self.st["pos_of"] = {a.versuch: i for i, a in enumerate(att)}
+        self.dash_static = {
+            "attempts": att, "records": read_json(src.run_dir / "rekorde.json"), "mine": src.mine,
+            "mine_time": src.mine["time"] if src.mine else None,
+            "weights": src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
+            "train_s": training_seconds(src.run_dir), "jump": lambda v: src.jump(p, v),
+        }
+        ctx = self.dash_ctx()
+        self.ui["panel"].refresh(ctx)
+        self.ui["panel"].texts(ctx)
+
+    def dash_ctx(self):
+        """Was das Dashboard jedes Bild braucht (billig: nur Verweise, nichts kopieren)."""
+        p = self.player
+        ep = p.episode
+        ctx = dict(getattr(self, "dash_static", {}) or {})
+        if not ctx:
+            return None
+        f = self.src.focus_attempt(p)
+        ctx.update(episode=ep, t=p.t, focus_index=self.st.get("pos_of", {}).get(f),
+                   obs=ep.obs_at(p.t) if ep is not None else None,
+                   action=ep.action[min(int(ep.frame_at(p.t)), max(ep.frames - 1, 0))] if ep is not None and ep.frames else None,
+                   result=self.src.result(p), shown=self.src.shown(p, self._ghost_lines()))
+        return ctx
 
     def _ghost_lines(self):
         p = self.player
         if not (self.with_ghosts and p.ghosts_on):
             return []
         first, last = p.group[0][0].versuch, p.group[-1][0].versuch
+        n = len(p.group)
         if p.group_mode == "meilensteine":
-            lines = ["", f"Geister: {len(p.group)} Meilensteine (Versuch {nr(first)} bis {nr(last)})"]
+            head = f"Geister: {n} Meilensteine (Versuch {nr(first)} bis {nr(last)})"
         elif p.group_mode == "letzte":
-            lines = ["", f"Geister: die letzten {len(p.group)} (Versuch {nr(first)} bis {nr(last)})"]
+            head = f"Geister: die letzten {n} (Versuch {nr(first)} bis {nr(last)})"
         else:
             von, bis = p.range
-            lines = ["", f"Geister: {len(p.group)} aus Versuch {nr(von)}–{nr(bis)}", "   gleichmässig verteilt"]
+            head = f"Geister: {n} aus Versuch {nr(von)}–{nr(bis)}, gleichmässig verteilt"
         best = min((a for a, _ in p.group), key=p.best_key)
         cur = p.current
-        lines.append("Kamera folgt dem, der am weitesten kommt" if cur and cur.versuch == best.versuch
-                     else "Kamera folgt deiner Auswahl (Klick)")
-        place = next((i + 1 for i, (v, _) in enumerate(self.st["rank"]) if v == (p.current and p.current.versuch)), None)
-        if place:
-            lines.append(f"Dieser Versuch: Platz {place} von {len(p.group)}")
-        n_ok = sum(a.gueltig for a, _ in p.group)
-        lines.append(f"Im Ziel: {n_ok} von {len(p.group)}")
-        return lines
+        follow = "Kamera: der am weitesten kommt" if cur and cur.versuch == best.versuch else "Kamera: deine Auswahl"
+        place = next((i + 1 for i, (v, _) in enumerate(self.st["rank"]) if v == (cur and cur.versuch)), None)
+        tail = f"  ·  Platz {place}/{n}" if place else ""
+        return [head, f"{follow}{tail}  ·  im Ziel {sum(a.gueltig for a, _ in p.group)}/{n}"]
 
     def refresh_strips(self):
         from render.viewer_ui import attempts_image
@@ -478,7 +514,9 @@ class ViewerApp:
         old = st["rank"]
         st["rank"] = [(a.versuch, text) for _, a, text in entries]
         if st["panel"] and [v for v, _ in old] != [v for v, _ in st["rank"]]:
-            self.update_panel()                                  # Platz im Dashboard = Platz in der Rangliste
+            ctx = self.dash_ctx()                                # Platz im Dashboard = Platz in der Rangliste
+            if ctx:
+                self.ui["panel"].texts(ctx)
         focus = p.current.versuch if p.current else None
         rows, shown = [], entries[:self.ranking.ROWS]
         if focus not in [a.versuch for _, a, _ in shown]:           # Fokus immer zeigen
@@ -632,10 +670,18 @@ class ViewerApp:
         self.player.update(dt)
         changed = self.player.changed
         self.show_car(dt)
+        dash = self.ui["panel"]
+        ctx = self.dash_ctx() if st["panel"] else None
+        if ctx:
+            dash.frame(ctx, mx, my)
         st["texts_t"] = st.get("texts_t", 0.0) - dt
         if st["texts_t"] <= 0 or changed:            # Texte 20x pro Sekunde reichen (jedes Mal ein neues Bild)
             st["texts_t"] = 0.05
             self.update_texts()
+        st["dash_t"] = st.get("dash_t", 0.0) - dt
+        if ctx and (st["dash_t"] <= 0 or changed):   # Zahlen im Dashboard 10x pro Sekunde
+            st["dash_t"] = 0.1
+            dash.texts(ctx)
 
     def input(self, key):
         from ursina import application, window
@@ -650,7 +696,9 @@ class ViewerApp:
                 ui["range"].close()
             return
         if key == "escape":
-            if ui["help"].visible:
+            if ui["panel"].help_box.visible:
+                ui["panel"].help_box.close()
+            elif ui["help"].visible:
                 ui["help"].toggle()
             else:
                 application.quit()
@@ -659,6 +707,8 @@ class ViewerApp:
                 if b.contains(mx, my):
                     b.on_click()
                     return
+            if st["panel"] and ui["panel"].click(mx, my, self.dash_ctx()):
+                return
             for s in (ui["attempts"], ui["ride"]):
                 if s.contains(mx, my):
                     s.dragging = True
@@ -717,6 +767,8 @@ class ViewerApp:
             self._toggle_labels()
         elif key in ("h", "f1"):
             ui["help"].toggle()
+        elif key in ("scroll up", "scroll down") and st["panel"] and ui["panel"].contains(mx, my):
+            ui["panel"].wheel(key == "scroll up")
         elif key in ("scroll up", "scroll down") and CAM_MODES[st["cam"]][0] == "free":
             self.free_cam.zoom(1 if key == "scroll up" else -1)
 
@@ -770,6 +822,15 @@ class ViewerApp:
                 self.input("right mouse down")
                 st["mouse"] = (x0 + (x1 - x0) * float(what[2]), y)
                 self.input("right mouse up")
+            elif what[0] == "karte":                     # maus:karte:lernkurve:kopf / :frage / :inhalt:0.3:0.5
+                card = next(c for c in self.ui["panel"].cards if c.key == what[1])
+                r = {"kopf": card.head_rect, "frage": card.q_rect}.get(what[2], card.rect)
+                fx, fy = (float(what[3]), float(what[4])) if len(what) > 4 else (0.5, 0.5)
+                st["mouse"] = (r[0] + (r[2] - r[0]) * fx, r[1] + (r[3] - r[1]) * fy)
+            elif what[0] == "panel":                     # maus:panel:0.5:0.3 = Stelle im Dashboard (Anteil x, y)
+                x0, y0, x1, y1 = self.ui["panel"].rect
+                fx, fy = (float(what[1]), float(what[2])) if len(what) > 2 else (0.5, 0.5)
+                st["mouse"] = (x0 + (x1 - x0) * fx, y0 + (y1 - y0) * fy)
             elif what[0] == "geist":                     # nächster sichtbarer Geist
                 cars = [c for c in self.fleet.cars if c.root.enabled and c.ui is not None] if self.fleet else []
                 st["mouse"] = cars[int(what[1]) if len(what) > 1 else 0].ui if cars else (0.0, 0.1)

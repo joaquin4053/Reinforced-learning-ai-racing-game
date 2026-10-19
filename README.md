@@ -194,9 +194,14 @@ nach dem Training, liest nur Dateien und läuft mit niedriger Priorität (nice 1
 - **Oben:** Info-Zeile mit Versuch, Art (Training mit Zufall / Auswertung ohne Zufall), Reward, Ergebnis.
 - **Unten:** Zeitleiste aller Versuche (Höhe = Fortschritt; grün = Ziel, gelb = Ziel in der Auswertung,
   rot = Crash, grau = Zeitlimit). Ziehen = spulen, Klick = zu diesem Versuch. Darunter die aktuelle Fahrt
-  (Tempo-Verlauf), darunter die Knöpfe: zurück, Play/Pause, weiter, Tempo (0.5× bis 50×), LIVE, Filter, Kamera, Panel.
+  (Tempo-Verlauf), darunter die Knöpfe: zurück, Play/Pause, weiter, Tempo (0.5× bis 50×), LIVE, Filter, Kamera, Dashboard.
 - **Kameras** (C): Verfolger, Drohne (filmisch: schräg von oben, schwenkt langsam ums Auto), von oben, frei.
-- **Rechts:** Panel (P), wird in Schritt 8 und 9 zum Dashboard.
+- **Rechts: Dashboard** (P blendet es aus). Karten untereinander, jede mit Klick auf den Titel ein-/ausklappbar,
+  **?** = kurze Erklärung (was du siehst, warum das fürs Lernen wichtig ist), Mausrad = scrollen:
+  Gezeigt · 1 Lernkurve (Reward pro Versuch + Durchschnitt, Klick = hinspringen) · 2 Rundenzeit (gültige Runden,
+  offizielle Bestzeit als Treppe, deine als Linie) · 3 Erfolgsstufen · 4 Sensoren (Fächer der 17 Strahlen)
+  · 5 Aktionen (Lenkung, Gas, Bremse, Drift) · 6 Reward dieser Fahrt (nach R7 aufgeteilt) · 7 Statistik.
+  Alles bezieht sich auf den gezeigten Versuch und die Stelle der Zeitleiste; auch in `watch.py`.
 - **LIVE:** springt zum neuesten Versuch und folgt dem Training. Neue Versuche erscheinen von selbst.
 - Alle Tastenkürzel: `?` (oder H).
 

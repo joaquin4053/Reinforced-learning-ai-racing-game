@@ -44,7 +44,7 @@ from game.ghost import best_time  # noqa: E402
 from game.track import Track  # noqa: E402
 from render.viewer_app import Source, ViewerApp, nr, result_text  # noqa: E402
 from rl.env import RaceEnv  # noqa: E402
-from rl.playback import SPEEDS, Player, VersionIndex, read_json  # noqa: E402
+from rl.playback import SPEEDS, EpisodeIndex, Player, VersionIndex, read_json  # noqa: E402
 
 torch.set_num_threads(1)
 if RaceEnv(config=cfg["reward_config"]).versions["sensoren"] != cfg["versionen"]["sensoren"]:
@@ -106,21 +106,35 @@ class ModelSource(Source):
             return text
         return f"{(info.get('ende') or '').upper()}\n{info.get('fortschritt_prozent', 0):.0f} % geschafft"
 
-    def panel(self, index, player, extra=()):
-        ok = sum(a.gueltig for a in index.attempts)
-        live = read_json(self.run_dir / "live.json")
-        steps = max([live.get("schritte") or 0] + [a.schritte for a in index.attempts[-1:]])
-        lines = [f"Schritte (Training): {nr(steps)}",
-                 f"Versuche (Training): {nr(live['versuche'])}" if live.get("versuche") else "Versuche: –",
-                 f"Versionen: {nr(len(index.attempts))}  (im Ziel {nr(ok)})"]
-        lines += self.records()
+    def shown(self, player, extra=()):
         a, ep = player.current, player.episode
-        if a is not None:
-            lines += ["", f"Diese Version: {self.name(a)}", f"   gespeichert bei Schritt {nr(a.schritte)}"]
+        if a is None:
+            return ["–"]
+        lines = [f"Version von {self.name(a)}  ·  gespeichert bei Schritt {nr(a.schritte)}",
+                 "fährt jetzt (ohne Zufall)" + (f"  ·  Auswertung damals: {result_text(a)}" if a.bekannt else "")]
         if ep is not None:
-            lines += [f"Diese Fahrt: {format_time(ep.duration)}" + ("" if ep.done else " ..."),
-                      f"Wandberührungen: {ep.env.sim.wall_hits}"]
+            lines.append(f"Diese Fahrt: {format_time(ep.duration)}" + ("" if ep.done else " ...")
+                         + f"  ·  Wandberührungen: {ep.env.sim.wall_hits}")
         return lines + self.footer(player)
+
+    def curve_index(self, player):
+        if not hasattr(self, "_curves"):
+            self._curves = EpisodeIndex(self.run_dir)          # Lernkurve/Rundenzeit: alle Versuche des Laufs
+        return self._curves
+
+    def focus_attempt(self, player):
+        return player.current.auswertung_nr if player.current else None
+
+    def jump(self, player, versuch):
+        """Klick in eine Kurve: die Version, die bei diesem Versuch (oder kurz danach) gespeichert wurde."""
+        known = [(i, a) for i, a in enumerate(player.list) if a.auswertung_nr]
+        if known:
+            i, _ = min(known, key=lambda x: abs(x[1].auswertung_nr - versuch))
+            player.select(i)
+
+    def result(self, player):
+        info = (player.episode.info or {}) if player.episode is not None else {}
+        return "Ziel" if info.get("gueltige_runde") else "Crash" if info.get("crash") else ""
 
 
 from game.sim import format_time  # noqa: E402
