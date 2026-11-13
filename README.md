@@ -183,8 +183,8 @@ The project has strict rules ([CLAUDE.md](CLAUDE.md)) so that the AI's lap times
 Tested on macOS (Apple Silicon) with Python 3.13.
 
 ```bash
-git clone https://github.com/joaquin4053/Reinforced-Learning-AI-Racing-Game.git
-cd Reinforced-Learning-AI-Racing-Game
+git clone https://github.com/joaquin4053/Reinforced-learning-ai-racing-game.git
+cd Reinforced-learning-ai-racing-game
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
