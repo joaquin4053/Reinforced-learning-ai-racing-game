@@ -35,6 +35,8 @@ Everything else, like braking before a hairpin, drifting through a curve or taki
 | 🎮 **Output** | 4 numbers: steering, throttle, brake, drift (exactly the same controls a human has) |
 | ⏱️ **Result** | First valid lap after **599 attempts**, best lap **0:51.40** after ~3,000 attempts (human record: 0:47.55) |
 
+> 🚧 **Work in progress:** the reward function is not fully tuned yet. You can see this in the [lap-time curve](#the-numbers): after about 3,000 attempts the AI stops improving and stays at roughly the same lap time, instead of continuing to get faster. With a reworked reward, I'm confident the AI will beat my own best lap of 0:47.55.
+
 ---
 
 ## Watch it learn
