@@ -33,6 +33,7 @@ ap.add_argument("--auswahl", choices=("bereich", "letzte", "meilensteine"), help
 ap.add_argument("--gegen-mich", action="store_true", help="eigene Bestzeit als Geist mitfahren lassen")
 ap.add_argument("--ghost", action="append", default=[], help="weitere Geist-Datei (mehrfach möglich)")
 ap.add_argument("--foto", nargs=2, metavar=("DATEI", "SEKUNDEN"), help=argparse.SUPPRESS)   # Test: Bild speichern
+ap.add_argument("--video", nargs=2, metavar=("ORDNER", "SEKUNDEN"), help=argparse.SUPPRESS)  # Bilder fürs Video
 ap.add_argument("--tasten", default="", help=argparse.SUPPRESS)   # Test: Tasten/Maus, z.B. "p maus:versuche:0.3 klick los"
 args = ap.parse_args()
 
@@ -75,6 +76,6 @@ except OSError:
     pass
 
 app = ViewerApp(Source(run_dir, cfg, track, ghosts=ghosts, mine=mine), player, test_keys=args.tasten,
-                photo=args.foto)
+                photo=args.foto, video=args.video)
 update, input, text_input = app.update, app.input, app.text_input
 app.run()

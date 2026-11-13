@@ -1,0 +1,367 @@
+{
+  "name": "v3_lauf1",
+  "erstellt": "2026-10-19 23:45:46",
+  "seed": 0,
+  "versionen": {
+    "physik": 14,
+    "regeln": 4,
+    "sensoren": 6,
+    "strecke": 7,
+    "reward": 1
+  },
+  "strecke_id": "poly01",
+  "git": {
+    "commit": "def5083b26ea0f3835a7b443f9c26a1729b20b5c",
+    "geaendert": true,
+    "aenderungen": [
+      "M CLAUDE.md",
+      " M README.md",
+      " M config.toml",
+      " M game/config.py",
+      " M game/track.py",
+      " M render/dashboard.py",
+      " M render/viewer_app.py",
+      " M render/world.py",
+      " M reward_config.toml",
+      " M rl/env.py",
+      " M rl/playback.py",
+      " M rl/trainer.py",
+      " M tests/test_training.py",
+      " M train.py",
+      " M train_config.toml",
+      " M watch.py",
+      "?? render/deko.py",
+      "?? tests/test_tracks.py",
+      "?? tracks/poly04.json"
+    ]
+  },
+  "pakete": {
+    "python": "3.13.15",
+    "numpy": "2.5.4",
+    "torch": "2.14.1",
+    "stable_baselines3": "2.9.0",
+    "gymnasium": "1.4.0",
+    "rechner": "Darwin arm64"
+  },
+  "befehl": [
+    "train.py",
+    "--name",
+    "v3_lauf1",
+    "--profil",
+    "voll"
+  ],
+  "sac": {
+    "lernrate": 0.0003,
+    "puffer": 300000,
+    "batch": 256,
+    "gamma": 0.995,
+    "tau": 0.005,
+    "lernstart": 10000,
+    "updates_pro_schritt": 0.25,
+    "netz": [
+      256,
+      256
+    ],
+    "kritik_aufwaermen": 200000,
+    "aktion_wiederholen": 1,
+    "ziel_entropie": "auto"
+  },
+  "ablauf": {
+    "auswertung_alle_schritte": 25000,
+    "tensorboard_alle_schritte": 5000
+  },
+  "erfolg": {
+    "zuverlaessig_serie": 5,
+    "plateau_schritte": 2000000,
+    "plateau_sekunden": 0.1
+  },
+  "aufzeichnung": {
+    "episoden": true,
+    "snapshot_alle_versuche": 20,
+    "meilensteine": [
+      10,
+      20,
+      50,
+      100,
+      200,
+      500,
+      1000,
+      2000,
+      5000,
+      10000
+    ]
+  },
+  "reward_config": {
+    "version": {
+      "reward": 1
+    },
+    "gewichte": {
+      "k_fortschritt": 1.0,
+      "k_zeit": 0.1,
+      "k_crash": 50.0,
+      "k_ziel": 100.0
+    },
+    "umgebung": {
+      "strecke": "tracks/poly01.json",
+      "drift_erlaubt": true
+    }
+  },
+  "spiel_config": {
+    "versionen": {
+      "physik": 14,
+      "regeln": 4,
+      "sensoren": 6
+    },
+    "simulation": {
+      "physik_hz": 60,
+      "unterschritte": 4,
+      "gravitation": 9.81
+    },
+    "auto": {
+      "mass": 1100.0,
+      "inertia": 1700.0,
+      "cg_to_front": 1.2,
+      "cg_to_rear": 1.3,
+      "cg_height": 0.3,
+      "suspension_time": 0.12,
+      "length": 4.0,
+      "width": 2.0,
+      "track_width": 1.7
+    },
+    "antrieb": {
+      "engine_power": 600000.0,
+      "max_drive_force": 21000.0,
+      "brake_force": 32000.0,
+      "reverse_force": 4500.0,
+      "max_reverse": 10.0,
+      "drag": 0.32,
+      "rolling": 20.0,
+      "engine_brake": 3000.0,
+      "downforce": 1.4
+    },
+    "reifen": {
+      "grip": 1.9,
+      "stiffness_front": 160000.0,
+      "stiffness_rear": 210000.0,
+      "slide_grip": 0.85,
+      "rear_grip_factor": 1.2
+    },
+    "lenkung": {
+      "max_steer": 0.55,
+      "steer_speed_falloff": 20.0,
+      "steer_rate": 6.0
+    },
+    "drift": {
+      "drift_rear_grip": 0.75,
+      "drift_slide_grip": 0.85,
+      "drift_max_steer": 0.6,
+      "drift_rate": 5.0
+    },
+    "luft": {
+      "schwere": 1.3,
+      "abtrieb_nach_unten": 0.4,
+      "yaw_damping": 0.6,
+      "level_rate": 0.4,
+      "spin_damping": 0.3,
+      "landing_loss": 0.1
+    },
+    "kollision": {
+      "step_height": 1.6,
+      "abprall": 0.3,
+      "max_steigung": 45.0,
+      "rand_durchbruch": 12.0,
+      "max_vy_boden": 12.0
+    },
+    "regeln": {
+      "fall_depth": 4.0,
+      "stuck_seconds": 2.0,
+      "stuck_min_progress": 1.0,
+      "wrong_way_meters": 15.0,
+      "time_limit": 180.0
+    },
+    "sensoren": {
+      "anzahl_strahlen": 17,
+      "winkel_bereich": 180.0,
+      "reichweite": 200.0,
+      "schrittweite": 0.5,
+      "kante": 0.5,
+      "tempo_norm": 110.0,
+      "vertikal_norm": 30.0
+    }
+  },
+  "strecke": {
+    "name": "Einstieg",
+    "version": 7,
+    "width": 22,
+    "rand": true,
+    "start": [
+      0,
+      60,
+      0,
+      0
+    ],
+    "pieces": [
+      [
+        "start"
+      ],
+      [
+        "straight",
+        220
+      ],
+      [
+        "turn",
+        80,
+        140,
+        10,
+        {
+          "breite": 46
+        }
+      ],
+      [
+        "straight",
+        120,
+        {
+          "breite": 30
+        }
+      ],
+      [
+        "slope",
+        40,
+        2
+      ],
+      [
+        "slope",
+        200,
+        -24,
+        {
+          "rand": false
+        }
+      ],
+      [
+        "straight",
+        80,
+        {
+          "breite": 18
+        }
+      ],
+      [
+        "checkpoint"
+      ],
+      [
+        "turn",
+        -45,
+        120,
+        6
+      ],
+      [
+        "turn",
+        45,
+        120,
+        6
+      ],
+      [
+        "straight",
+        160,
+        {
+          "breite": 16
+        }
+      ],
+      [
+        "slope",
+        160,
+        20,
+        {
+          "breite": 24
+        }
+      ],
+      [
+        "turn",
+        -150,
+        85,
+        22,
+        {
+          "breite": 50
+        }
+      ],
+      [
+        "straight",
+        100,
+        {
+          "breite": 26
+        }
+      ],
+      [
+        "slope",
+        30,
+        2
+      ],
+      [
+        "slope",
+        180,
+        -18,
+        {
+          "rand": false
+        }
+      ],
+      [
+        "checkpoint"
+      ],
+      [
+        "straight",
+        140,
+        {
+          "breite": 20
+        }
+      ],
+      [
+        "turn",
+        -60,
+        110,
+        12
+      ],
+      [
+        "turn",
+        95,
+        95,
+        18,
+        {
+          "breite": 40
+        }
+      ],
+      [
+        "straight",
+        120,
+        {
+          "breite": 24
+        }
+      ],
+      [
+        "turn",
+        110,
+        100,
+        24,
+        {
+          "breite": 44
+        }
+      ],
+      [
+        "checkpoint"
+      ],
+      [
+        "straight",
+        320,
+        {
+          "breite": 22
+        }
+      ],
+      [
+        "finish"
+      ],
+      [
+        "straight",
+        60
+      ]
+    ]
+  },
+  "start_netz": null
+}

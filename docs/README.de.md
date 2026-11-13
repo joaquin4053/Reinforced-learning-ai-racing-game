@@ -1,6 +1,6 @@
 # KI-Fahrschule
 
-Ziel, Regeln und Erfolgsstufen stehen in [CLAUDE.md](CLAUDE.md).
+Ziel, Regeln und Erfolgsstufen stehen in [CLAUDE.md](../CLAUDE.md).
 
 Einfacher Trackmania-Clone in Python (Ursina) als Spielwiese für Reinforcement Learning.
 
@@ -22,6 +22,7 @@ python3 -m venv .venv
 | `.venv/bin/python check_ready.py` | Prüft, ob die Simulation regelkonform und bereit fürs Training ist (OK/FEHLER je Prüfung) |
 | `.venv/bin/python -m pytest` | Automatische Tests (u.a. Determinismus) |
 | `.venv/bin/python train.py --name test1` | KI trainieren (siehe [Training](#training)) |
+| `.venv/bin/python play.py tracks/poly04.json` | Strecke "Sommer 5" fahren (Nachbau von PolyTrack Summer 5, siehe unten) |
 | `.venv/bin/python watch.py test1 --live` | Der KI beim Fahren zuschauen (Netz fährt jetzt) |
 | `.venv/bin/python viewer.py test1` | Aufgezeichnete Versuche ansehen wie im Videoplayer |
 
@@ -90,11 +91,10 @@ Alte Geister werden dann als „alte Version“ markiert und alte Bestzeiten zä
 
 ## Für die KI
 - **Gym-Umgebung:** `rl/env.py` (`RaceEnv`) mit `reset()` und `step(action)` nach Gymnasium-Standard.
-  Aktion `[Lenkung, Gas, Bremse, Drift]`, Beobachtung siehe Tabelle in [CLAUDE.md](CLAUDE.md).
+  Aktion `[Lenkung, Gas, Bremse, Drift]`, Beobachtung siehe Tabelle in [CLAUDE.md](../CLAUDE.md).
 - **Reward** genau nach Regel R7, Gewichte in `reward_config.toml`. Beispiel mit echten Zahlen:
-  `.venv/bin/python tools/reward_example.py`. Seit Reward v2 (2026-10-19) hängt der Ziel-Bonus von der
-  Rundenzeit ab: 20 Punkte pro Sekunde unter dem Zeitlimit (51 s -> 2'580). Dazu `gamma = 0.999` in
-  `train_config.toml`: Die KI schaut ~17 s voraus statt 3 s und sieht so, dass eine schnellere Runde mehr bringt.
+  `.venv/bin/python tools/reward_example.py`. Ein zeitabhängiger Ziel-Bonus (Reward v2) wurde am 2026-10-19
+  ausprobiert und wieder zurückgenommen: Das Training wurde damit instabil (v2_lauf3 bis v2_lauf5).
 - **Regel-Fahrer** `rl/rule_driver.py`: fährt nur mit den Sensoren der KI eine gültige Runde (Vergleichswert).
 - `Sim.observation()`: 21 Werte, nur Fahrersicht (Regel R5), Code in `game/sensors.py`.
 
@@ -110,7 +110,9 @@ Einstellungen in `train_config.toml`.
 ```
 `--start-netz`: neues Training (eigene Zähler, leerer Replay-Buffer, aktuelle Versionen), das mit den Gewichten
 eines vorhandenen Modells beginnt statt mit einem Zufallsnetz. Geht nur, wenn Sensoren und Aktionen gleich sind
-(R8); woher das Netz kommt, steht in `config.json` (R9).
+(R8); woher das Netz kommt, steht in `config.json` (R9). Die ersten `kritik_aufwaermen` Schritte (200'000) lernt
+nur der Critic, der Actor fährt unverändert weiter: So lernt der Critic zuerst den neuen Reward, bevor der Actor
+ihm folgt. Die Statuszeile zeigt dabei „Critic wärmt auf … %“.
 Der Mac bleibt automatisch wach, solange das Training läuft (`train.py` startet dafür `caffeinate -i`).
 **Deckel offen lassen**: Zugeklappt schläft ein MacBook trotzdem ein. Für eine Nacht am besten ans Netzteil.
 
@@ -257,4 +259,16 @@ Obere Zeitleiste = Versionen (eine pro Auswertung, alle 25'000 Schritte), untere
 ist, lässt sich zurückspulen; vorspulen rechnet voraus. `--gegen-mich` gibt es auch bei `viewer.py`.
 
 ## Credits
-Automodell: "2020 NASCAR Chevrolet Camaro Zl1 1LE" von Ddiaz Design, CC-BY-4.0. Details in [CREDITS.md](CREDITS.md).
+Automodell: "2020 NASCAR Chevrolet Camaro Zl1 1LE" von Ddiaz Design, CC-BY-4.0. Details in [CREDITS.md](../CREDITS.md).
+
+## Strecke "Sommer 5" (`tracks/poly04.json`)
+Nachbau der PolyTrack-Strecke *Summer 5*, nur durch Zuschauen entstanden (Bildmitschnitt von 6 Runden, 2026-10-19):
+Abfolge, Kurvenrichtungen und Breiten aus den Bildern, Längen aus Tacho × Zeit der Bestrunde (1:01.544). Alle 8
+Checkpoints liegen auf wenige Meter dort, wo sie nach Tacho und Zeit liegen (Strecke 3'933 m). Eigene Fahrbahn,
+eigene Kulisse (`"deko"` in der Datei, gezeichnet von `render/deko.py`), nichts aus dem Spiel übernommen.
+
+Bewusste Abweichungen, weil unser Spiel es (noch) nicht kann:
+- Keine Kreuzungen über/unter sich selbst (eine Höhenkarte) -> diese Stellen liegen nebeneinander.
+- Keine senkrechte Wand-Kurve (ab 45° wirkt eine Fläche wie eine Wand) -> Steilkurve mit 42°.
+- Keine Gabelung um das rote Haus -> breite Fahrbahn, das Haus steht daneben.
+Getestet: Regel-Fahrer (nur Sensoren der KI) kommt bis 250 km/h ins Ziel, keine Löcher oder Stufen.

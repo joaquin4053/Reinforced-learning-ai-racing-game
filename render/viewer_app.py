@@ -22,6 +22,7 @@ FILTER_TEXT = {"alle": "Alle Versuche", "auswertungen": "Nur Auswertungen", "gue
 CAM_MODES = (("chase", "Verfolger"), ("cine", "Drohne"), ("top", "Von oben"), ("free", "Frei"))
 TOP_H, PANEL_W = 0.042, 0.6
 BOTTOM_H = {False: 0.17, True: 0.224}      # mit Geistern: zweite Knopfreihe
+VIDEO_FPS = 30                              # nur für die versteckte Option --video
 
 
 def nr(x):
@@ -146,7 +147,7 @@ class Source:
 
 
 class ViewerApp:
-    def __init__(self, source, player, test_keys="", photo=None):
+    def __init__(self, source, player, test_keys="", photo=None, video=None):
         import render  # noqa: F401  GL-Setup für macOS, muss vor Ursina() geladen sein
         from ursina import Entity, Ursina, camera, window
         from ursina.shaders import unlit_shader
@@ -246,6 +247,13 @@ class ViewerApp:
                    "mouse": None, "keys": test_keys.split(), "keys_wait": 0.5, "rank_t": 0.0, "rank": [], "range_drag": None,
                    "fps": []}
         self.photo = photo
+        self.video = video                       # (Ordner, Sekunden): jedes Bild als PNG, feste 30 Bilder/s
+        if video:
+            from panda3d.core import ClockObject
+            clock = ClockObject.getGlobalClock()
+            clock.setMode(ClockObject.MForced)   # dt immer 1/30 s, egal wie lange ein Bild dauert
+            clock.setFrameRate(VIDEO_FPS)
+            self.st["video_n"] = 0
         self.refresh_strips()
 
     def run(self):
@@ -429,6 +437,7 @@ class ViewerApp:
             "weights": {**src.cfg.get("reward_config", {}).get("gewichte", {"k_zeit": 0.1, "k_crash": 50, "k_ziel": 100}),
                         "zeitlimit": src.cfg.get("spiel_config", {}).get("regeln", {}).get("time_limit", 180.0)},
             "train_s": training_seconds(src.run_dir), "jump": lambda v: src.jump(p, v),
+            "wiederholen": src.cfg.get("sac", {}).get("aktion_wiederholen", 1),     # Schritt = Entscheidung
             "get_nets": lambda: src.nets(p), "get_prev": lambda: src.prev_actor(p), "track": src.track,
         }
         ctx = self.dash_ctx()
@@ -690,6 +699,8 @@ class ViewerApp:
         self._test_input(dt)
         if self.photo:
             self._photo(dt)
+        if self.video:
+            self._video_frame()
         st["refresh"] -= dt
         if st["refresh"] <= 0:                       # neue Versuche/Versionen des laufenden Trainings
             st["refresh"] = 1.0
@@ -842,6 +853,24 @@ class ViewerApp:
                 print(f"FPS {len(late) / sum(late):.1f}  (langsamstes Bild {1000 * max(late):.0f} ms)", flush=True)
             application.base.win.saveScreenshot(Filename.fromOsSpecific(str(Path(self.photo[0]).resolve())))
             application.quit()
+
+    def _video_frame(self):
+        """Versteckte Option --video ORDNER SEKUNDEN: jedes Bild speichern (erst nach 1 s Einschwingen)."""
+        from pathlib import Path
+
+        from panda3d.core import Filename
+        from ursina import application
+        st = self.st
+        st["video_n"] += 1
+        n = st["video_n"] - VIDEO_FPS                    # die erste Sekunde (Laden, Kamera) nicht aufnehmen
+        if n < 0:
+            return
+        if n >= float(self.video[1]) * VIDEO_FPS:
+            application.quit()
+            return
+        out = Path(self.video[0]).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        application.base.win.saveScreenshot(Filename.fromOsSpecific(str(out / f"f_{n:05d}.png")))
 
     def _test_input(self, dt):
         """Pro Bild ein Eintrag: maus:versuche:0.3 / maus:fahrt:0.5 / maus:knopf:play / maus:3d,
