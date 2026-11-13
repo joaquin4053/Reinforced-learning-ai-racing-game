@@ -10,11 +10,30 @@
 lernrate = 0.0003
 puffer = 300_000              # Replay-Buffer: so viele Schritte merkt sich die KI (ca. 60 MB Arbeitsspeicher)
 batch = 256                   # Schritte pro Lern-Update
-gamma = 0.999                 # wie weit die KI vorausdenkt: ca. 1/(1-gamma) = 1000 Schritte = 17 s (vorher 0.995 = 3.3 s)
+gamma = 0.995                 # wie weit die KI vorausdenkt: ca. 1/(1-gamma) = 200 Schritte = 3.3 s
+                              # (0.998/0.999 am 2026-10-19 getestet: zusammen mit Reward v2 instabil, siehe reward_config.toml)
 tau = 0.005                   # wie schnell die Ziel-Netze nachgeführt werden
 lernstart = 10_000            # so viele Schritte zufällig fahren, bevor das Lernen beginnt
 updates_pro_schritt = 0.25    # Lern-Updates pro gesammeltem Schritt, unabhängig vom Profil
-netz = [64, 64]               # 2 Schichten mit je 64 Neuronen, für Actor und Critic
+netz = [256, 256]             # 2 Schichten mit je 256 Neuronen, für Actor und Critic (bis 2026-10-19: [64, 64];
+                              # Probelauf: 256 + Sensoren 200 m nach 2 Mio. Schritten 52.37 s statt 55.75 s)
+kritik_aufwaermen = 200_000   # nur bei --start-netz: so viele Schritte lernt zuerst nur der Critic (Actor unverändert)
+aktion_wiederholen = 1        # jede Entscheidung so viele Physik-Schritte halten (1 = jeden Schritt neu, R4)
+ziel_entropie = "auto"        # wie viel Zufall SAC beim Ausprobieren anstrebt ("auto" = -Anzahl Aktionen = -4)
+
+# Varianten (train.py --variante NAME): überschreiben einzelne Werte aus [sac] für ein NEUES Training.
+# feinschliff: ab einem guten Netz (--start-netz) ruhig weiterlernen statt neu (Ansatz A, 2026-10-19).
+#   Gilt nur für ein Start-Netz mit gleichen Sensoren (seit Sensor-Version 6 passt v2_lauf2 nicht mehr) und gleicher
+#   Netzgrösse (dann zusätzlich netz = [64, 64] hier eintragen).
+#   kleinere Lernrate (driftet nicht mehr ab), Entscheidung alle 3 Physik-Schritte (weniger Zappeln).
+#   gamma 0.985 pro Entscheidung = 0.995 pro Physik-Schritt -> gleich weit vorausschauen wie bisher (3.3 s).
+#   Getestet 2026-10-19 (Scratch, 300'000 Entscheidungen): stabil, 9/11 Auswertungen im Ziel, 51.9-54.5 s.
+#   NICHT ziel_entropie verkleinern: mit -8 brach die KI nach dem Aufwärmen völlig ein (0/10 im Ziel).
+[varianten.feinschliff]
+lernrate = 0.00005
+aktion_wiederholen = 3
+gamma = 0.985
+kritik_aufwaermen = 60_000    # Entscheidungen (= 180'000 Physik-Schritte)
 
 [ablauf]
 auswertung_alle_schritte = 25_000     # deterministische Testfahrt (R6), ergibt die offiziellen Zeiten

@@ -36,9 +36,15 @@ def load_reward_config(path=REWARD_CONFIG):
 class RaceEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, track_file=None, config=None, record=False, aufzeichnen=False):
+    def __init__(self, track_file=None, config=None, record=False, aufzeichnen=False, wiederholen=1, on_frame=None):
         """record = Fahrt für einen Geist mitschreiben (Sim.history).
-        aufzeichnen = jeden Schritt für episodes/ sammeln (Plan-Schritt 5); am Ende in info["aufzeichnung"]."""
+        aufzeichnen = jeden Schritt für episodes/ sammeln (Plan-Schritt 5); am Ende in info["aufzeichnung"].
+        wiederholen = jede Aktion so viele Physik-Schritte lang halten (KI entscheidet seltener: erlaubt nach R4,
+        "höchstens eine Entscheidung pro Physik-Schritt"). Reward = Summe der Physik-Schritte (R7 unverändert),
+        Zeit = Physik-Schritte × Zeitschritt (R6 unverändert).
+        on_frame(aktion, reward, obs) wird nach jedem einzelnen Physik-Schritt aufgerufen (watch.py)."""
+        self.repeat = max(1, int(wiederholen))
+        self.on_frame = on_frame
         self.config = config or load_reward_config()
         w = self.config["gewichte"]
         self.k_progress, self.k_time = w["k_fortschritt"], w["k_zeit"]
@@ -74,6 +80,33 @@ class RaceEnv(gym.Env):
         act = np.asarray(action, dtype=np.float64).reshape(-1)
         if not self.drift:
             act = np.append(act[:3], 0.0)
+        total, obs = 0.0, None
+        for _ in range(self.repeat):
+            reward = self._physics_step(act)
+            total += reward
+            obs = None
+            if self.recorder or self.on_frame or self.sim.done:   # Zwischenbilder nur, wenn jemand sie braucht
+                obs = self.sim.observation()
+                self._frame(act, reward, obs)
+            if self.sim.done:
+                break
+        if obs is None:
+            obs = self.sim.observation()
+        terminated = self.sim.result in ("finished", "crashed")
+        truncated = self.sim.result == "truncated"
+        info = self._info()
+        if self.recorder and (terminated or truncated):
+            info["aufzeichnung"] = self.recorder.finish()
+        return obs, total, terminated, truncated, info
+
+    def _frame(self, act, reward, obs):
+        if self.recorder:
+            self.recorder.add(np.clip(act, ACTION_LOW, ACTION_HIGH), reward, self.sim, obs)
+        if self.on_frame:
+            self.on_frame(act, reward, obs)
+
+    def _physics_step(self, act):
+        """Ein Physik-Schritt und sein Reward nach R7."""
         self.sim.step(act)    # zu große Werte schneidet die Simulation ab (R4)
 
         # --- Reward nach R7 ---
@@ -88,15 +121,7 @@ class RaceEnv(gym.Env):
         reward = float(sum(parts.values()))
         self.last_reward = parts
         self.episode_reward += reward
-
-        terminated = self.sim.result in ("finished", "crashed")
-        truncated = self.sim.result == "truncated"
-        obs, info = self.sim.observation(), self._info()
-        if self.recorder:
-            self.recorder.add(np.clip(act, ACTION_LOW, ACTION_HIGH), reward, self.sim, obs)
-            if terminated or truncated:
-                info["aufzeichnung"] = self.recorder.finish()
-        return obs, reward, terminated, truncated, info
+        return reward
 
     def finish_bonus(self, lap_time=None):
         """Ziel-Bonus (R7): v2 = k_ziel_pro_sekunde x (Zeitlimit - Rundenzeit), v1 = fest k_ziel."""

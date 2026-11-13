@@ -162,7 +162,7 @@ def load_policy(path):
 
 
 def make_env():
-    return RaceEnv(config=cfg["reward_config"], record=False)
+    return RaceEnv(config=cfg["reward_config"], record=False, wiederholen=cfg["sac"].get("aktion_wiederholen", 1))
 
 
 index = VersionIndex(run_dir, make_env, load_policy, extra=extra)

@@ -29,19 +29,19 @@ SUBPROCESS_FROM = 3       # ab so vielen Umgebungen bekommt jede ihren eigenen P
 
 
 # ---------- Umgebungen ----------
-def _env_factory(reward_cfg, in_subprocess, record):
+def _env_factory(reward_cfg, in_subprocess, record, repeat=1):
     def init():
         if in_subprocess:   # Ctrl+C / Fenster schliessen trifft nur das Hauptprogramm, das dann sauber pausiert
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        return RaceEnv(config=reward_cfg, aufzeichnen=record)
+        return RaceEnv(config=reward_cfg, aufzeichnen=record, wiederholen=repeat)
     return init
 
 
-def make_vec_env(reward_cfg, n, record=True):
+def make_vec_env(reward_cfg, n, record=True, repeat=1):
     sub = n >= SUBPROCESS_FROM
     cls = SubprocVecEnv if sub else DummyVecEnv
-    return VecMonitor(cls([_env_factory(reward_cfg, sub, record) for _ in range(n)]))
+    return VecMonitor(cls([_env_factory(reward_cfg, sub, record, repeat) for _ in range(n)]))
 
 
 def update_schedule(n_envs, ratio):
@@ -74,8 +74,8 @@ def regroup_buffer(old, n_envs):
 
 
 # ---------- Auswertung (R6: deterministisch, ohne Zufall) ----------
-def evaluate(model, reward_cfg, record=True):
-    env = RaceEnv(config=reward_cfg, record=True, aufzeichnen=record)
+def evaluate(model, reward_cfg, record=True, repeat=1):
+    env = RaceEnv(config=reward_cfg, record=True, aufzeichnen=record, wiederholen=repeat)
     obs, info = env.reset()
     done = False
     while not done:
@@ -86,14 +86,18 @@ def evaluate(model, reward_cfg, record=True):
 
 
 def load_start_net(model, path):
-    """Gewichte (Actor, Critic, Ziel-Netze, Optimierer) und Entropie-Wert eines vorhandenen Modells übernehmen.
-    Der Replay-Buffer startet leer, die Zähler bei 0 – es ist ein neues Training, nur nicht mit Zufallsnetz."""
+    """Gewichte (Actor, Critic, Ziel-Netze) und Entropie-Wert eines vorhandenen Modells übernehmen.
+    Der Replay-Buffer startet leer, die Zähler bei 0 – es ist ein neues Training, nur nicht mit Zufallsnetz.
+
+    Die Optimierer (Adam) starten bewusst frisch: Ihr Zustand merkt sich, wie gross die Lernschritte bisher waren.
+    Mit einem neuen Reward ist dieser Massstab falsch (v2_lauf3/v2_lauf4: Critic-Fehler bis 11'780, KI verlernte
+    das Fahren). Ein frischer Adam stellt sich in den ersten Updates selbst auf den neuen Massstab ein."""
     from stable_baselines3.common.save_util import load_from_zip_file
     data, params, variables = load_from_zip_file(path, device="cpu")
     if data["observation_space"].shape != model.observation_space.shape or \
             data["action_space"].shape != model.action_space.shape:
         raise ValueError("Start-Netz passt nicht: andere Beobachtung oder andere Aktionen (R8).")
-    model.set_parameters(params, exact_match=False, device="cpu")
+    model.set_parameters({"policy": params["policy"]}, exact_match=False, device="cpu")   # nur die Netze
     if variables and "log_ent_coef" in variables and getattr(model, "log_ent_coef", None) is not None:
         model.log_ent_coef.data.copy_(variables["log_ent_coef"])
 
@@ -123,31 +127,36 @@ class Trainer:
         self.stop_steps, self.stop_minutes = stop_steps, stop_minutes
         self.stop_reason = None
         self.model = self.env = None
+        self.frozen = False
         self.recent = []                                # letzte 100 Trainings-Fahrten: (gültig, Zeit)
         rec = cfg["aufzeichnung"]
         self.record_episodes = rec["episoden"]
         self.snapshot_every, self.milestones = rec["snapshot_alle_versuche"], set(rec["meilensteine"])
+        self.repeat = int(cfg["sac"].get("aktion_wiederholen", 1))
 
     # ---------- Aufbau ----------
     def new(self, seed, start_net=None):
         """Neues Training. start_net = Pfad zu einem Modell (.zip), dessen Netz übernommen wird (train.py --start-netz)."""
         s = self.cfg["sac"]
         apply_priority(self.profile)
-        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
+        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes, self.repeat)
         self.model = SAC("MlpPolicy", self.env, learning_rate=s["lernrate"], buffer_size=s["puffer"],
                          batch_size=s["batch"], gamma=s["gamma"], tau=s["tau"], learning_starts=s["lernstart"],
                          policy_kwargs={"net_arch": list(s["netz"])}, tensorboard_log=str(self.run.tb_dir),
-                         seed=seed, device="cpu", verbose=0)
+                         target_entropy=s.get("ziel_entropie", "auto"), seed=seed, device="cpu", verbose=0)
+        warmup = 0
         if start_net:
             load_start_net(self.model, start_net)
+            warmup = int(s.get("kritik_aufwaermen", 0))
         self._set_schedule()
         self.state = {"versuche": 0, "laufzeit_s": 0.0, "auswertungen": 0, "serie": 0, "bestzeit": None,
                       "bestzeit_schritte": None, "bestzeit_versuch": None, "bestzeit_verlauf": [], "stufen": {},
-                      "letzte_auswertung": 0, "snapshot": None, "sitzungen": []}
+                      "letzte_auswertung": 0, "snapshot": None, "sitzungen": [], "aufwaermen_bis": warmup}
+        self._freeze_actor(warmup > 0)
 
     def resume(self, cp_dir):
         apply_priority(self.profile)
-        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
+        self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes, self.repeat)
         self.model = SAC.load(cp_dir / "model.zip", env=self.env, device="cpu",
                               tensorboard_log=str(self.run.tb_dir))
         self.model.load_replay_buffer(cp_dir / "replay_buffer.pkl")
@@ -156,6 +165,8 @@ class Trainer:
         self._set_schedule()
         self.state = self.run.load_state(cp_dir)
         self.state.setdefault("snapshot", None)
+        self.state.setdefault("aufwaermen_bis", 0)
+        self._freeze_actor(self.model.num_timesteps < self.state["aufwaermen_bis"])
         self.state["versuche"] = max(self.state["versuche"], self.run.highest_attempt())   # nie eine Nummer doppelt
         self.run.restore_rng(cp_dir)
         self._merge_records()
@@ -187,13 +198,29 @@ class Trainer:
         nice = apply_priority(self.profile)
         if self.profile.envs != old.envs:
             self.env.close()
-            self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes)
+            self.env = make_vec_env(self.reward_cfg, self.profile.envs, self.record_episodes, self.repeat)
             self.model.replay_buffer = regroup_buffer(self.model.replay_buffer, self.profile.envs)
             self.model.n_envs = self.profile.envs
             self.model.set_env(self.env)        # angefangene Fahrten werden verworfen, Neustart am Start
         self._set_schedule()
         self.say(f"Profil {old.name} -> {self.profile} ({why}), Priorität jetzt nice {nice}")
         self._log("profilwechsel", bemerkung=f"{old.name} -> {self.profile.name}: {why}")
+
+    # ---------- Aufwärmen nach --start-netz ----------
+    def _freeze_actor(self, on):
+        """Critic aufwärmen: Actor und Entropie-Wert bleiben, wie sie übernommen wurden; nur der Critic lernt.
+        Sonst folgt der Actor einem Critic, der den neuen Reward noch nicht kennt, und verlernt das Fahren.
+        (Die Lern-Updates laufen weiter, nur ihr letzter Schritt – die Gewichte ändern – wird ausgelassen.)"""
+        self.frozen = on
+        for opt in (self.model.actor.optimizer, getattr(self.model, "ent_coef_optimizer", None)):
+            if opt is None:
+                continue
+            if on and "_real_step" not in opt.__dict__:
+                opt._real_step = opt.step
+                opt.step = lambda *a, **k: None
+            elif not on and "_real_step" in opt.__dict__:
+                opt.step = opt._real_step
+                del opt._real_step
 
     # ---------- Hauptschleife ----------
     def train(self, session):
@@ -232,6 +259,10 @@ class Trainer:
             if done:
                 self._episode_done(info, i)
         steps = self.steps
+        if self.frozen and steps >= self.state["aufwaermen_bis"]:
+            self._freeze_actor(False)
+            self.say(f"Critic aufgewärmt ({steps:,} Schritte) – ab jetzt lernt auch der Actor.".replace(",", "'"))
+            self._log("aufwaermen", bemerkung="Critic aufgewärmt, Actor lernt ab jetzt mit")
         if steps - self.state["letzte_auswertung"] >= self.cfg["ablauf"]["auswertung_alle_schritte"]:
             self.state["letzte_auswertung"] = steps
             self.run_evaluation()
@@ -310,7 +341,7 @@ class Trainer:
         return n
 
     def run_evaluation(self):
-        info, sim = evaluate(self.model, self.reward_cfg, self.record_episodes)
+        info, sim = evaluate(self.model, self.reward_cfg, self.record_episodes, self.repeat)
         st = self.state
         n = self._record_attempt(info, "auswertung")
         st["auswertungen"] += 1
@@ -438,7 +469,9 @@ class Trainer:
         best = format_time(st["bestzeit"]) if st["bestzeit"] is not None else "–"
         stage = f"Stufe {self.stage}" + (f" {STAGE_TEXT[self.stage]}" if self.stage else "")
         power = getattr(self, "power", None)
-        text = (f"Versuch {st['versuche']:,} | Bestzeit {best} | {stage} | Schritte {self.steps:,} | "
+        warm = (f"Critic wärmt auf {100 * self.steps / st['aufwaermen_bis']:.0f} % | "
+                if self.frozen and st.get("aufwaermen_bis") else "")
+        text = (warm + f"Versuch {st['versuche']:,} | Bestzeit {best} | {stage} | Schritte {self.steps:,} | "
                 f"{self._sps():,.0f}/s | Laufzeit {_hms(self.laufzeit)} | {self.profile.name}"
                 + (f" ({power.text})" if power else "")).replace(",", "'")
         _write("\r\033[K" + text)

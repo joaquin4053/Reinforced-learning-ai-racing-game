@@ -1,4 +1,5 @@
-"""Netz-Panel im Dashboard (Plan-Schritt 9): der Actor von SAC (24 -> 64 -> 64 -> 4) im klassischen Stil.
+"""Netz-Panel im Dashboard (Plan-Schritt 9): der Actor von SAC (24 -> N -> N -> 4) im klassischen Stil.
+Die Netzgrösse N kommt aus dem gezeigten Netz (train_config.toml [sac] netz, z.B. 64 oder 256).
 
 - Vier Spalten: Eingaben, Schicht 1, Schicht 2, Ausgaben. Neuronen als gleich grosse Kreise, je nach Aktivierung
   gefüllt (inaktiv = nur ein heller Ring). Eingaben mit Namen, Ausgaben mit Namen und Balken.
@@ -29,7 +30,8 @@ from render.hud import TextQuad, _font
 from render.viewer_ui import GREY, _place, _quad, _texture
 from rl.netview import INPUT_NAMES, OUTPUT_NAMES
 
-SIZES = (24, 64, 64, 4)
+SIZES = (24, 64, 64, 4)        # Startwert; wird an das gezeigte Netz angepasst (self.sizes)
+SHOW_MAX = 64                  # "alle": bei grösseren Schichten höchstens so viele (die aktivsten) – sonst unlesbar
 HEADERS = ("Eingaben", "Schicht 1", "Schicht 2", "Ausgaben")
 FEW = 12                      # "nur die 12 aktivsten pro Schicht"
 MAX_LINES = 50                # höchstens so viele aktive Verbindungen je Schicht
@@ -91,10 +93,9 @@ class NetCard(Card):
         self.headers = [TextQuad(t, parent=b, height=0.0145, origin=(0, 0), px=34, heavy=True) for t in HEADERS]
         self.structure = _quad(b, color.white, z=0.03)
         self.change_img = _quad(b, color.white, z=0.025)
-        self.rings = [[Entity(parent=b, model=Circle(20, mode="line", thickness=1.5), shader=unlit_shader,   # je ein
-                              color=color.rgba(0.82, 0.85, 0.95, 0.75), z=-0.02) for _ in range(n)] for n in SIZES]  # Modell
-        self.fills = [[Entity(parent=b, model="circle", shader=unlit_shader, color=color.rgb32(*C_FILL), z=-0.015)
-                       for _ in range(n)] for n in SIZES]
+        self.sizes = list(SIZES)
+        self.rings, self.fills = [], []
+        self._make_pool()
         self.in_labels = [TextQuad(n, parent=b, height=0.0118, origin=(.5, 0), px=30, color=GREY) for n in INPUT_NAMES]
         self.out_labels = [TextQuad("", parent=b, height=0.0135, origin=(-.5, -.5), px=32) for _ in OUTPUT_NAMES]
         self.out_bg = [_quad(b, color.rgba(0.1, 0.12, 0.25, 1), z=0.01) for _ in OUTPUT_NAMES]
@@ -107,8 +108,8 @@ class NetCard(Card):
         self.crit_dot = Entity(parent=b, model="circle", shader=unlit_shader, color=color.white, z=-0.01)
         self.crit_value = TextQuad("", parent=b, height=0.0145, origin=(.5, .5), px=34, heavy=True, color=(255, 200, 40))
         self.actor = self.critic = self.prev = None
-        self.shown = [list(range(n)) for n in SIZES]
-        self.pos = [{} for _ in SIZES]
+        self.shown = self._default_shown()
+        self.pos = [{} for _ in self.sizes]
         self.slots = {}                       # aktive Verbindung (Schicht, nach, von) -> Linie
         self._reset_state()
         self._ep_key = self._crit_canvas = None
@@ -118,11 +119,47 @@ class NetCard(Card):
 
     def _reset_state(self):
         self.s = None                          # geglättete Beiträge je Schicht
-        self.node_s = [np.zeros(n) for n in SIZES]
+        self.node_s = [np.zeros(n) for n in self.sizes]
         self.peak_c = [1e-6, 1e-6, 1e-6]
         self.peak_n = [1.0, 1.0, 1.0, 1.0]
         self.out_s = np.zeros(4)
         self._t = None
+
+    # ---------- Neuronen (Anzahl je nach Netz) ----------
+    def _make_pool(self):
+        """Ringe und Füllungen für jedes Neuron (je ein eigenes Modell, Ursina teilt keine Meshes)."""
+        for e in [x for layer in self.rings + self.fills for x in layer]:
+            e.enabled = False
+            e.parent = None
+        b = self.body
+        self.rings = [[Entity(parent=b, model=Circle(20, mode="line", thickness=1.5), shader=unlit_shader,
+                              color=color.rgba(0.82, 0.85, 0.95, 0.75), z=-0.02, enabled=False) for _ in range(n)]
+                      for n in self.sizes]
+        self.fills = [[Entity(parent=b, model="circle", shader=unlit_shader, color=color.rgb32(*C_FILL), z=-0.015,
+                              enabled=False) for _ in range(n)] for n in self.sizes]
+
+    def _limit(self, li):
+        """Wie viele Neuronen dieser Schicht gezeigt werden."""
+        n = self.sizes[li]
+        return min(n, SHOW_MAX) if self.show_all else min(n, FEW)
+
+    def _default_shown(self):
+        return [list(range(self.sizes[0])), list(range(self._limit(1))), list(range(self._limit(2))),
+                list(range(self.sizes[3]))]
+
+    def _set_sizes(self, actor):
+        sizes = [actor.w1.shape[1], actor.w1.shape[0], actor.w2.shape[0], actor.w3.shape[0]]
+        if sizes == self.sizes:
+            return
+        self.sizes = sizes
+        self._make_pool()
+        self.shown = self._default_shown()
+        self.pos = [{} for _ in self.sizes]
+        self._reset_state()
+        self._few_t = 0.0
+        if hasattr(self, "W"):
+            self._layout_nodes()
+            self._update_controls()
 
     # ---------- Aufbau ----------
     def build(self, w, h):
@@ -151,7 +188,7 @@ class NetCard(Card):
         """Neuronen gleichmässig verteilen (nur die gezeigten), Ringe/Füllungen setzen."""
         x0, y0, x1, y1 = self.net
         pad = 0.012
-        for li, (col, n) in enumerate(zip(self.cols, SIZES)):
+        for li, (col, n) in enumerate(zip(self.cols, self.sizes)):
             idx = self.shown[li]
             m = len(idx)
             step = (y1 - y0 - 2 * pad) / max(m, 1)
@@ -237,7 +274,10 @@ class NetCard(Card):
         self.legend.texture = _texture(img.resize((W, H), Image.LANCZOS))
 
     def _update_controls(self):
-        self.btn_mode.set("Neuronen: alle 64" if self.show_all else f"Neuronen: {FEW} aktivste", False)
+        n = max(self.sizes[1], self.sizes[2])
+        text = (f"Neuronen: alle {n}" if n <= SHOW_MAX else f"Neuronen: {SHOW_MAX} aktivste") if self.show_all \
+            else f"Neuronen: {FEW} aktivste"
+        self.btn_mode.set(text, False)
         self.btn_change.set("Veränderung: an" if self.show_change else "Veränderung: aus", self.show_change)
         x0, x1, y = self.slider
         x = x0 + (x1 - x0) * self.thr
@@ -251,10 +291,12 @@ class NetCard(Card):
         actor, critic = nets
         if actor is not self.actor:
             self.actor, self.critic = actor, critic
+            if actor is not None:
+                self._set_sizes(actor)
             self._reset_state()
             self._ep_key = None
             self._change_key = None
-        self.caption.text = (f"{self.actor.label}  ·  Actor von SAC: 24 Eingaben, 2 x 64 Neuronen, 4 Aktionen"
+        self.caption.text = (f"{self.actor.label}  ·  Actor von SAC: 24 Eingaben, 2 x {self.sizes[1]} Neuronen, 4 Aktionen"
                              if self.actor else "kein Snapshot gefunden (runs/<name>/models/)")
         self._ensure_episode(ctx)
         self._draw_change(ctx)
@@ -337,10 +379,11 @@ class NetCard(Card):
         for li, v in enumerate(nodes):
             self.node_s[li] = v.copy() if jump else self.node_s[li] + (v - self.node_s[li]) * k
         self.out_s = act.copy() if jump else self.out_s + (act - self.out_s) * k
-        if not self.show_all and perf_counter() - self._few_t > 0.5:  # die 12 aktivsten (alle 0.5 s neu)
+        partial = self._limit(1) < self.sizes[1] or self._limit(2) < self.sizes[2]
+        if partial and perf_counter() - self._few_t > 0.5:  # die aktivsten (alle 0.5 s neu)
             self._few_t = perf_counter()
-            new = [list(range(24)), sorted(np.argsort(self.node_s[1])[::-1][:FEW].tolist()),
-                   sorted(np.argsort(self.node_s[2])[::-1][:FEW].tolist()), list(range(4))]
+            new = [list(range(self.sizes[0])), sorted(np.argsort(self.node_s[1])[::-1][:self._limit(1)].tolist()),
+                   sorted(np.argsort(self.node_s[2])[::-1][:self._limit(2)].tolist()), list(range(self.sizes[3]))]
             if new != self.shown:
                 self.shown = new
                 self._layout_nodes()
@@ -450,7 +493,7 @@ class NetCard(Card):
         x, y = mx - self.rect[0], my - self.rect[1]
         if self.btn_mode.hit(x, y):
             self.show_all = not self.show_all
-            self.shown = [list(range(n)) for n in SIZES] if self.show_all else self.shown
+            self.shown = self._default_shown()
             self._few_t = 0.0
             self._layout_nodes()
             self._update_controls()

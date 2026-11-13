@@ -196,8 +196,15 @@ class LiveEpisode(Episode):
         self.frames = 0
         self.done = False
         self.info = None
-        self._obs, _ = env.reset()
+        env.on_frame = self._on_frame                          # jeden Physik-Schritt mitschreiben (auch bei
+        self._obs, _ = env.reset()                             # Aktions-Wiederholung, train_config [sac])
         self._store(0, self._obs)
+
+    def _on_frame(self, act, reward, obs):
+        self.action[self.frames] = np.asarray(act, np.float32).reshape(-1)[:4]
+        self.reward[self.frames] = reward
+        self.frames += 1
+        self._store(self.frames, obs)
 
     def _store(self, i, obs):
         c = self.env.sim.car
@@ -209,11 +216,7 @@ class LiveEpisode(Episode):
         t0 = time.perf_counter()
         while not self.done and self.duration < t and time.perf_counter() - t0 < self.BUDGET:
             act, _ = self.policy.predict(self._obs, deterministic=True)
-            self._obs, reward, terminated, truncated, info = self.env.step(act)
-            self.action[self.frames] = np.asarray(act, np.float32).reshape(-1)[:4]
-            self.reward[self.frames] = reward
-            self.frames += 1
-            self._store(self.frames, self._obs)
+            self._obs, reward, terminated, truncated, info = self.env.step(act)   # Bilder: _on_frame
             if terminated or truncated:
                 self.done, self.info = True, info
 

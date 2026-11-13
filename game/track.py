@@ -20,7 +20,8 @@ Format:
     ["turn", 90, 80, {"breite": 50}],    ... und/oder {"breite": m}: Breite ändert sich weich über den Baustein
     ["checkpoint"],             Checkpoint (in dieser Reihenfolge zu durchfahren, Regel R1)
     ["finish"]                  Ziel
-  ]
+  ],
+  "deko": [...]                 optional: Kulisse nur zur Anzeige (Wände, Häuser, Schilder, Brücken), render/deko.py
 }
 
 Daraus entstehen:
@@ -160,6 +161,7 @@ class Track:
         self.path = str(path) if path else None
         self.id = Path(path).stem if path else data.get("name", "map")
         self.name = data.get("name", self.id)
+        self.deko = list(data.get("deko", []))       # Kulisse nur zur Anzeige (render/deko.py), keine Physik
         self.version = int(data.get("version", 1))
         self.width = float(data.get("width", 12))
         self.is_loop = False                       # Bausteinstrecken gehen von Start bis Ziel

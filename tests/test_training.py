@@ -226,11 +226,89 @@ def test_start_from_existing_net(tmp_path, monkeypatch):
 
 
 def test_finish_bonus_depends_on_lap_time():
-    """Reward v2 (R7 geändert am 2026-10-19): Ziel-Bonus = 20 pro Sekunde unter dem Zeitlimit."""
+    """Reward v2 (am 2026-10-19 ausprobiert, wieder zurückgenommen): Ziel-Bonus = 20 pro Sekunde unter dem
+    Zeitlimit. Läufe mit v2 (v2_lauf3 bis 5) müssen sich weiter richtig ansehen lassen; v1 bleibt fest 100."""
     from rl.env import RaceEnv
-    env = RaceEnv()
+    v2 = {**load_reward_config(), "gewichte": {"k_fortschritt": 1.0, "k_zeit": 0.1, "k_crash": 50.0,
+                                                "k_ziel_pro_sekunde": 20.0}}
+    env = RaceEnv(config=v2)
     assert env.finish_bonus(51.0) == pytest.approx(20 * (180 - 51))
     assert env.finish_bonus(48.0) - env.finish_bonus(55.0) == pytest.approx(140)
     assert env.finish_bonus(200.0) == 0.0
-    old = {**load_reward_config(), "gewichte": {"k_fortschritt": 1.0, "k_zeit": 0.1, "k_crash": 50.0, "k_ziel": 100.0}}
-    assert RaceEnv(config=old).finish_bonus(51.0) == 100.0      # alte Läufe (Reward v1) unverändert
+    assert RaceEnv().finish_bonus(51.0) == 100.0               # aktuell wieder Reward v1: fest 100
+
+
+def test_start_net_warms_up_critic_first(tmp_path, monkeypatch):
+    """--start-netz: Während des Aufwärmens ändert sich nur der Critic, danach lernt auch der Actor.
+    Auch über Pausieren/Fortsetzen hinweg."""
+    import copy
+    import torch
+    monkeypatch.setattr("rl.run.RUNS_DIR", tmp_path)
+    reward = load_reward_config()
+    cfg = copy.deepcopy(SMALL)
+    cfg["sac"]["kritik_aufwaermen"] = 900
+    old = Run("alt")
+    old.create(cfg)
+    t0 = Trainer(old, cfg, reward, RES, _profiles(1), "sparsam", stop_steps=300)
+    t0.new(seed=0)
+    t0.train({})
+    t0.model.save(tmp_path / "alt.zip")
+    actor0 = [p.detach().clone() for p in t0.model.actor.parameters()]
+    critic0 = [p.detach().clone() for p in t0.model.critic.parameters()]
+    run = Run("neu")
+    run.create(cfg)
+    t1 = Trainer(run, cfg, reward, RES, _profiles(1), "sparsam", stop_steps=600)
+    t1.new(seed=1, start_net=tmp_path / "alt.zip")
+    t1.train({})                                                   # 600 < 900: noch am Aufwärmen
+    assert all(torch.equal(a, b) for a, b in zip(actor0, t1.model.actor.parameters()))
+    assert not all(torch.equal(a, b) for a, b in zip(critic0, t1.model.critic.parameters()))
+    t2 = Trainer(run, cfg, reward, RES, _profiles(1), "sparsam", stop_steps=1500)
+    t2.resume(run.find_checkpoint())
+    assert t2.frozen
+    t2.train({})                                                   # über 900 hinaus: Actor lernt mit
+    assert not t2.frozen
+    assert not all(torch.equal(a, b) for a, b in zip(actor0, t2.model.actor.parameters()))
+    assert "aufwaermen" in run.events_file.read_text()
+
+
+def test_start_net_takes_weights_but_fresh_optimizers(tmp_path, monkeypatch):
+    """Nur die Gewichte werden übernommen; Adam startet leer (sonst falscher Massstab bei neuem Reward)."""
+    monkeypatch.setattr("rl.run.RUNS_DIR", tmp_path)
+    reward = load_reward_config()
+    old = Run("alt")
+    old.create(SMALL)
+    t0 = Trainer(old, SMALL, reward, RES, _profiles(1), "sparsam", stop_steps=400)
+    t0.new(seed=0)
+    t0.train({})
+    assert t0.model.actor.optimizer.state                       # das alte Modell hat gelernt
+    t0.model.save(tmp_path / "alt.zip")
+    run = Run("neu")
+    run.create(SMALL)
+    t1 = Trainer(run, SMALL, reward, RES, _profiles(1), "sparsam")
+    t1.new(seed=1, start_net=tmp_path / "alt.zip")
+    for opt in (t1.model.actor.optimizer, t1.model.critic.optimizer, t1.model.ent_coef_optimizer):
+        assert not opt.state                                   # frisch
+
+
+def test_action_repeat_keeps_physics_time_and_reward():
+    """Aktion 3 Physik-Schritte halten: gleiche Fahrt, gleiche Zeit (R6), Reward = Summe (R7), jedes Bild aufgezeichnet."""
+    from rl.env import RaceEnv
+    a = RaceEnv(aufzeichnen=True)
+    b = RaceEnv(aufzeichnen=True, wiederholen=3)
+    frames = []
+    b.on_frame = lambda act, r, obs: frames.append(r)
+    a.reset(); b.reset()
+    act = np.array([0.2, 1.0, 0.0, 0.0])
+    ra = sum(a.step(act)[1] for _ in range(30))
+    rb = sum(b.step(act)[1] for _ in range(10))
+    assert a.sim.frame == b.sim.frame == 30
+    assert (a.sim.car.x, a.sim.car.z) == pytest.approx((b.sim.car.x, b.sim.car.z))
+    assert ra == pytest.approx(rb) and len(frames) == 30 and sum(frames) == pytest.approx(rb)
+    assert len(b.recorder.actions) == 30
+
+
+def test_variant_feinschliff_in_config():
+    import tomllib
+    from train import TRAIN_CONFIG
+    v = tomllib.load(open(TRAIN_CONFIG, "rb"))["varianten"]["feinschliff"]
+    assert v["aktion_wiederholen"] == 3 and v["gamma"] == pytest.approx(0.995 ** 3, abs=1e-3)

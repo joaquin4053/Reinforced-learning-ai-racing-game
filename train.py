@@ -87,12 +87,20 @@ def main():
     ap.add_argument("--schritte", type=int, help="pausieren, sobald so viele Schritte erreicht sind")
     ap.add_argument("--minuten", type=float, help="pausieren nach so vielen Minuten (diese Sitzung)")
     ap.add_argument("--start-netz", help="neues Training mit dem Netz aus diesem Modell (.zip) beginnen")
+    ap.add_argument("--variante", help="Einstellungen aus [varianten.NAME] in train_config.toml (nur neues Training)")
     args = ap.parse_args()
+    if args.resume and args.variante:
+        sys.exit("--variante geht nur bei einem neuen Training (beim Fortsetzen gilt config.json).")
     if args.resume and args.start_netz:
         sys.exit("--start-netz geht nur bei einem neuen Training (beim Fortsetzen gilt der Fortsetzungspunkt).")
 
     with open(TRAIN_CONFIG, "rb") as f:
         train_cfg = tomllib.load(f)
+    if args.variante:
+        varianten = train_cfg.get("varianten", {})
+        if args.variante not in varianten:
+            sys.exit(f"Variante '{args.variante}' gibt es nicht. Vorhanden: {', '.join(varianten) or 'keine'}")
+        train_cfg["sac"] = {**train_cfg["sac"], **varianten[args.variante], "variante": args.variante}
     run = Run(args.name)
 
     if args.resume:

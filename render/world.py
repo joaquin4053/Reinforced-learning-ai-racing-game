@@ -535,6 +535,8 @@ class World:
         Entity(model=terrain_mesh(track))
         scenery(track)
         portals(track)
+        from render import deko
+        deko.build(track)                                 # Kulisse aus der Strecken-Datei (falls vorhanden)
         Entity(model=road_mesh(track))
 
         _gate(track.start_gate, track.start_gate.width, color.rgb32(255, 140, 20), height=7.5)

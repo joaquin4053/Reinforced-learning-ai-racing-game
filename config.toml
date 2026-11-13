@@ -12,7 +12,7 @@
 [versionen]
 physik = 14     # 7: 3D-Spiel, 8: Randwulst, 9: Fahrleistung, Steilkurven, Drehen in der Luft, 10: hoher Rand, 11: max. Steigung, 12: niedrige Kante, Abheben über Kuppen, 13: schwereres Auto, 14: Mittelweg Schwere 1.3, stärkere Bremse
 regeln = 4      # 3: Runterfallen = Crash (R2 geändert am 2026-10-18), 4: R5 um Steigung/Luft/senkrechtes Tempo ergänzt
-sensoren = 5    # 3: Strahlen messen Abstand zur Streckenkante, dazu Steigung, Luft, Tempo vertikal; 4: tempo_norm 75; 5: tempo_norm 110
+sensoren = 6    # 3: Strahlen messen Abstand zur Streckenkante, dazu Steigung, Luft, Tempo vertikal; 4: tempo_norm 75; 5: tempo_norm 110; 6: Reichweite 200 m
 
 [simulation]
 physik_hz = 60          # Physik-Schritte pro Sekunde (Zeitschritt = 1/60 s)
@@ -84,7 +84,7 @@ time_limit = 180.0          # Sekunden
 [sensoren]
 anzahl_strahlen = 17        # Sensorstrahlen, gleichmässig verteilt
 winkel_bereich = 180.0      # Grad, von links (-90°) bis rechts (+90°)
-reichweite = 100.0          # m (R5: nichts hinter der Sensorreichweite)
+reichweite = 200.0          # m (R5: nichts hinter der Sensorreichweite; bis Sensor-Version 5: 100 m)
 schrittweite = 0.5          # m: so fein tastet ein Strahl die Strecke ab
 kante = 0.5                 # m Höhensprung zwischen zwei Abtastpunkten = Streckenkante
 tempo_norm = 110.0          # m/s, Tempo wird für die KI durch diesen Wert geteilt

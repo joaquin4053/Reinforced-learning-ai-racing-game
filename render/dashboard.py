@@ -254,7 +254,7 @@ class SensorCard(Card):
     key, title, body_h = "sensoren", "Sensoren – was die KI sieht", 0.15
     text_every = 0.25
     help = ("Was du siehst: die 17 Sensorstrahlen der KI als Fächer von links (-90°) bis rechts (+90°).\n"
-            "Länge und Farbe = Abstand zur Streckenkante (rot = nah, grün = frei, höchstens 100 m).\n\n"
+            "Länge und Farbe = Abstand zur Streckenkante (rot = nah, grün = frei, höchstens so weit wie die Sensorreichweite).\n\n"
             "Warum das wichtig ist: Das ist alles, was die KI von der Strecke sieht (R5) – keine Karte,\n"
             "keine Ideallinie. Aus diesen Abständen plus Tempo und Winkel muss sie lernen zu lenken.")
 
@@ -445,7 +445,7 @@ class StatsCard(Card):
             f"Offizielle Bestzeit: {format_time(best) if best else '–'}" +
             (f"   (du: {format_time(ctx['mine_time'])})" if ctx["mine_time"] else ""),
             f"Versuche: {nr(len(att))}   ·   Schritte: {nr(steps)}",
-            f"Fahrerfahrung: {_hms(steps / 60)}   ·   Trainingsdauer: {_hms(ctx['train_s'])}",
+            f"Fahrerfahrung: {_hms(steps * ctx.get('wiederholen', 1) / 60)}   ·   Trainingsdauer: {_hms(ctx['train_s'])}",
         ])
 
 
